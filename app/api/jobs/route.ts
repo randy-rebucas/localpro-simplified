@@ -2,14 +2,13 @@ import mongoose from "mongoose";
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { Job } from "@/models/Job";
-import { JobType } from "@/models/JobType";
-import { Worker } from "@/models/Worker";
 import { JOB_POPULATE } from "@/lib/job-populate";
-import { findTimeOverlapForWorker } from "@/lib/job-queries";
 import { syncWorkerStatusFromJobs } from "@/lib/job-sync";
 import { formatJobDay, parseJobDateInput } from "@/lib/job-date";
 import { timeToMinutes } from "@/lib/time-overlap";
 import { HttpError, jsonUnexpected } from "@/lib/http-error";
+import { createJobDocument } from "@/lib/create-job";
+import { notifyWorkerNewAssignment } from "@/lib/notifications/worker-assignment";
 
 type PopulatedClient = { _id: mongoose.Types.ObjectId; business_name?: string };
 type PopulatedWorkerRow = {
@@ -39,13 +38,6 @@ function jobTypeParts(job_type_id: unknown): { job_type_id: string; job_type: st
   return { job_type_id: id, job_type: "", job_slug: "" };
 }
 
-export async function assertActiveJobType(job_type_id: string) {
-  const jt = await JobType.findById(job_type_id).lean();
-  if (!jt) return { ok: false as const, error: "Job type not found" };
-  if (!jt.active) return { ok: false as const, error: "Job type is inactive" };
-  return { ok: true as const, doc: jt };
-}
-
 export function serializeJob(
   doc: {
     _id: mongoose.Types.ObjectId;
@@ -60,6 +52,14 @@ export function serializeJob(
     notes: string;
     client_price?: number;
     worker_pay?: number;
+    invoice_id?: mongoose.Types.ObjectId | null;
+    recurring_series_id?: mongoose.Types.ObjectId | null;
+    worker_rating_by_client?: number | null;
+    worker_rating_by_client_comment?: string;
+    worker_rating_by_client_at?: Date | null;
+    client_rating_by_worker?: number | null;
+    client_rating_by_worker_comment?: string;
+    client_rating_by_worker_at?: Date | null;
     created_at?: Date;
     updated_at?: Date;
   },
@@ -122,6 +122,30 @@ export function serializeJob(
     notes: doc.notes,
     client_price,
     worker_pay,
+    invoice_id: doc.invoice_id ? String(doc.invoice_id) : null,
+    recurring_series_id: doc.recurring_series_id ? String(doc.recurring_series_id) : null,
+    worker_rating_by_client:
+      typeof doc.worker_rating_by_client === "number" &&
+      doc.worker_rating_by_client >= 1 &&
+      doc.worker_rating_by_client <= 5
+        ? doc.worker_rating_by_client
+        : null,
+    worker_rating_by_client_comment:
+      typeof doc.worker_rating_by_client_comment === "string"
+        ? doc.worker_rating_by_client_comment
+        : "",
+    worker_rating_by_client_at: doc.worker_rating_by_client_at?.toISOString() ?? null,
+    client_rating_by_worker:
+      typeof doc.client_rating_by_worker === "number" &&
+      doc.client_rating_by_worker >= 1 &&
+      doc.client_rating_by_worker <= 5
+        ? doc.client_rating_by_worker
+        : null,
+    client_rating_by_worker_comment:
+      typeof doc.client_rating_by_worker_comment === "string"
+        ? doc.client_rating_by_worker_comment
+        : "",
+    client_rating_by_worker_at: doc.client_rating_by_worker_at?.toISOString() ?? null,
     profit,
     margin_pct,
     created_at: doc.created_at?.toISOString() ?? null,
@@ -137,6 +161,8 @@ export async function GET(req: Request) {
     const client_id = searchParams.get("client_id");
     const worker_id = searchParams.get("worker_id");
     const job_type_id = searchParams.get("job_type_id");
+    const uninvoiced = searchParams.get("uninvoiced");
+    const recurring_series_id = searchParams.get("recurring_series_id");
 
     const filter: Record<string, unknown> = {};
     if (client_id && mongoose.isValidObjectId(client_id)) {
@@ -147,6 +173,12 @@ export async function GET(req: Request) {
     }
     if (job_type_id && mongoose.isValidObjectId(job_type_id)) {
       filter.job_type_id = job_type_id;
+    }
+    if (uninvoiced === "1") {
+      filter.invoice_id = null;
+    }
+    if (recurring_series_id && mongoose.isValidObjectId(recurring_series_id)) {
+      filter.recurring_series_id = recurring_series_id;
     }
     if (dateStr) {
       try {
@@ -188,11 +220,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid job_type_id" }, { status: 400 });
     }
 
-    const jtCheck = await assertActiveJobType(job_type_id);
-    if (!jtCheck.ok) {
-      return NextResponse.json({ error: jtCheck.error }, { status: 400 });
-    }
-
     let date: Date;
     try {
       date = parseJobDateInput(body.date);
@@ -231,43 +258,21 @@ export async function POST(req: Request) {
 
     try {
       await session.withTransaction(async () => {
-        const worker = await Worker.findById(worker_id).session(session).exec();
-        if (!worker) throw new HttpError(404, "Worker not found");
-        if (worker.status === "inactive") {
-          throw new HttpError(400, "Cannot book an inactive worker");
-        }
-
-        const overlap = await findTimeOverlapForWorker(
-          workerOid,
+        createdId = await createJobDocument({
+          client_id,
+          worker_id,
+          job_type_id,
           date,
           time_start,
           time_end,
-          undefined,
+          notes: String(body.notes ?? ""),
+          status,
+          payment_status,
+          client_price:
+            Number.isFinite(client_price) && client_price !== undefined ? client_price : undefined,
+          worker_pay: Number.isFinite(worker_pay) && worker_pay !== undefined ? worker_pay : undefined,
           session,
-        );
-        if (overlap) {
-          throw new HttpError(409, "Worker already has an overlapping job at this time");
-        }
-
-        const created = await Job.create(
-          [
-            {
-              client_id,
-              worker_id,
-              job_type_id,
-              date,
-              time_start,
-              time_end,
-              status,
-              payment_status,
-              notes: String(body.notes ?? ""),
-              ...(Number.isFinite(client_price) && client_price !== undefined ? { client_price } : {}),
-              ...(Number.isFinite(worker_pay) && worker_pay !== undefined ? { worker_pay } : {}),
-            },
-          ],
-          { session },
-        );
-        createdId = created[0]!._id as mongoose.Types.ObjectId;
+        });
       });
     } finally {
       await session.endSession();
@@ -279,6 +284,8 @@ export async function POST(req: Request) {
     if (!populated) {
       return jsonUnexpected(ROUTE, new Error("Job missing after create"), 500);
     }
+
+    if (createdId) void notifyWorkerNewAssignment(createdId);
 
     return NextResponse.json(
       serializeJob(populated as Parameters<typeof serializeJob>[0]),

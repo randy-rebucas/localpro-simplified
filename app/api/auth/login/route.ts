@@ -1,7 +1,7 @@
-import { createHash, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createSessionToken, sessionCookieName } from "@/lib/session";
+import { sha256VerifyPlain } from "@/lib/password-hash";
 import {
   isLoginBlocked,
   loginRateLimitKey,
@@ -14,12 +14,6 @@ const ROUTE = "POST /api/auth/login";
 
 function adminPassword(): string {
   return process.env.ADMIN_PASSWORD ?? "admin123";
-}
-
-function passwordMatches(expected: string, attempt: string): boolean {
-  const a = createHash("sha256").update(attempt, "utf8").digest();
-  const b = createHash("sha256").update(expected, "utf8").digest();
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export async function POST(req: Request) {
@@ -38,7 +32,7 @@ export async function POST(req: Request) {
 
     const attempt = typeof body.password === "string" ? body.password : "";
 
-    if (!passwordMatches(adminPassword(), attempt)) {
+    if (!sha256VerifyPlain(adminPassword(), attempt)) {
       recordLoginFailure(key);
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }

@@ -21,6 +21,9 @@ export function serializeClient(doc: {
   address: string;
   status: string;
   notes: string;
+  portal_enabled?: boolean;
+  rated_by_workers_avg?: number | null;
+  rated_by_workers_count?: number;
   contact_user_id: mongoose.Types.ObjectId | PopulatedContactUser;
   created_at?: Date;
   updated_at?: Date;
@@ -40,6 +43,11 @@ export function serializeClient(doc: {
     address: doc.address,
     status: doc.status,
     notes: doc.notes,
+    portal_enabled: doc.portal_enabled === true,
+    rated_by_workers_avg:
+      typeof doc.rated_by_workers_avg === "number" ? doc.rated_by_workers_avg : null,
+    rated_by_workers_count:
+      typeof doc.rated_by_workers_count === "number" ? doc.rated_by_workers_count : 0,
     created_at: doc.created_at?.toISOString() ?? null,
     updated_at: doc.updated_at?.toISOString() ?? null,
   };
@@ -94,6 +102,10 @@ export async function POST(req: Request) {
     });
     createdUserId = user._id;
 
+    const portal_password_raw =
+      typeof body.portal_password === "string" ? body.portal_password.trim() : "";
+    const portal_password = portal_password_raw ? portal_password_raw.slice(0, 256) : undefined;
+
     const doc = await Client.create({
       contact_user_id: user._id,
       business_name: String(body.business_name ?? ""),
@@ -102,6 +114,8 @@ export async function POST(req: Request) {
         ? body.status
         : "prospect",
       notes: String(body.notes ?? ""),
+      portal_enabled: !!portal_password,
+      ...(portal_password ? { portal_password } : {}),
     });
 
     const populated = await Client.findById(doc._id).populate("contact_user_id").lean();

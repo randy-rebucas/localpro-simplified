@@ -21,6 +21,9 @@ const WorkerSchema = new Schema(
       default: "available",
     },
     rating: { type: Number, min: 1, max: 5, default: 3 },
+    /** Rolling average (rounded) of worker_rating_by_client on completed jobs; maintained by API. */
+    rated_by_clients_avg: { type: Number, min: 1, max: 5 },
+    rated_by_clients_count: { type: Number, default: 0 },
     notes: { type: String, default: "", maxlength: 8000 },
   },
   {

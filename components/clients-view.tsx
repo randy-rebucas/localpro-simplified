@@ -41,6 +41,9 @@ type ClientRow = {
   address: string;
   status: "prospect" | "active" | "inactive";
   notes: string;
+  portal_enabled: boolean;
+  rated_by_workers_avg: number | null;
+  rated_by_workers_count: number;
   created_at: string | null;
 };
 
@@ -68,6 +71,8 @@ export default function ClientsView() {
     address: "",
     status: "prospect" as ClientRow["status"],
     notes: "",
+    portal_password: "",
+    portal_disable: false,
   });
 
   const debouncedQ = useDebounced(q, 300);
@@ -106,6 +111,8 @@ export default function ClientsView() {
       address: "",
       status: "prospect",
       notes: "",
+      portal_password: "",
+      portal_disable: false,
     });
     setOpen(true);
   }
@@ -120,13 +127,23 @@ export default function ClientsView() {
       address: row.address,
       status: row.status,
       notes: row.notes,
+      portal_password: "",
+      portal_disable: false,
     });
     setOpen(true);
   }
 
   async function save() {
     try {
-      const payload = { ...form };
+      const { portal_password, portal_disable, ...rest } = form;
+      const payload: Record<string, unknown> = { ...rest };
+      if (!editing) {
+        if (portal_password.trim()) payload.portal_password = portal_password.trim();
+      } else if (portal_disable) {
+        payload.portal_password = "";
+      } else if (portal_password.trim()) {
+        payload.portal_password = portal_password.trim();
+      }
       const res = editing
         ? await fetch(`/api/clients/${editing.id}`, {
             method: "PATCH",
@@ -213,6 +230,8 @@ export default function ClientsView() {
               <TableHead>Contact</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Email</TableHead>
+              <TableHead className="whitespace-nowrap">Workers ★</TableHead>
+              <TableHead>Portal</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[120px] text-right">Actions</TableHead>
             </TableRow>
@@ -220,13 +239,13 @@ export default function ClientsView() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground">
+                <TableCell colSpan={8} className="text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground">
+                <TableCell colSpan={8} className="text-muted-foreground">
                   No clients yet.
                 </TableCell>
               </TableRow>
@@ -238,6 +257,23 @@ export default function ClientsView() {
                   <TableCell>{row.phone}</TableCell>
                   <TableCell className="max-w-[180px] truncate text-muted-foreground">
                     {row.email ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-sm tabular-nums">
+                    {row.rated_by_workers_avg != null ? (
+                      <>
+                        ★{row.rated_by_workers_avg}{" "}
+                        <span className="text-muted-foreground">
+                          ({row.rated_by_workers_count})
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={row.portal_enabled ? "default" : "outline"}>
+                      {row.portal_enabled ? "On" : "Off"}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
@@ -327,6 +363,40 @@ export default function ClientsView() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="portal_password">Client portal password</Label>
+              <Input
+                id="portal_password"
+                type="password"
+                autoComplete="new-password"
+                value={form.portal_password}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, portal_password: e.target.value, portal_disable: false }))
+                }
+                placeholder={editing ? "Leave blank to keep current" : "Optional"}
+              />
+              <p className="text-xs text-muted-foreground">
+                Active clients can sign in at <span className="font-mono">/portal</span> with their
+                contact email and this password.
+              </p>
+              {editing?.portal_enabled ? (
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-input accent-primary"
+                    checked={form.portal_disable}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        portal_disable: e.target.checked,
+                        portal_password: e.target.checked ? "" : f.portal_password,
+                      }))
+                    }
+                  />
+                  Disable portal access
+                </label>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="notes">Notes</Label>

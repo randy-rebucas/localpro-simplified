@@ -1,11 +1,14 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeftRight, Loader2, Pencil, Plus, Sparkles, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { phpCurrencyFormatter } from "@/lib/currency-format";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -51,11 +54,56 @@ type JobRow = {
   worker_pay: number | null;
   profit: number | null;
   margin_pct: number | null;
+  invoice_id: string | null;
+  worker_rating_by_client: number | null;
+  worker_rating_by_client_comment: string;
+  worker_rating_by_client_at: string | null;
+  client_rating_by_worker: number | null;
+  client_rating_by_worker_comment: string;
+  client_rating_by_worker_at: string | null;
 };
 
 type ClientOpt = { id: string; business_name: string };
 type WorkerOpt = { id: string; full_name: string; status: string };
 type JobTypeOpt = { id: string; slug: string; label: string; active: boolean };
+
+type ReplacementCandidate = {
+  id: string;
+  full_name: string;
+  skill: string;
+  status: string;
+  rating: number;
+  rated_by_clients_avg: number | null;
+  location: string;
+  score: number;
+};
+
+type SmartSuggestionRow = {
+  id: string;
+  full_name: string;
+  skill: string;
+  status: string;
+  rating: number;
+  rated_by_clients_avg: number | null;
+  effective_rating: number;
+  preferred_skill: string | null;
+  skill_matches_job_type: boolean;
+  breakdown: {
+    location: number;
+    skill: number;
+    availability: number;
+    rating: number;
+  };
+  score: number;
+};
+
+type ReplacementHistoryRow = {
+  id: string;
+  created_at: string | null;
+  from_worker_name: string;
+  to_worker_name: string;
+  reason: string;
+};
 
 const jobStatuses: JobRow["status"][] = [
   "assigned",
@@ -79,14 +127,49 @@ export default function JobsView() {
   const [workers, setWorkers] = React.useState<WorkerOpt[]>([]);
   const [jobTypes, setJobTypes] = React.useState<JobTypeOpt[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [filterDate, setFilterDate] = React.useState("");
   const [filterClient, setFilterClient] = React.useState("__all__");
   const [filterWorker, setFilterWorker] = React.useState("__all__");
   const [filterJobType, setFilterJobType] = React.useState("__all__");
+  const [filterBilling, setFilterBilling] = React.useState<"__all__" | "uninvoiced">("__all__");
+  const filterRecurringSeries = searchParams.get("recurring_series_id") ?? "";
+
+  React.useEffect(() => {
+    const wid = searchParams.get("worker_id");
+    const d = searchParams.get("date");
+    React.startTransition(() => {
+      if (wid && /^[a-f\d]{24}$/i.test(wid)) setFilterWorker(wid);
+      if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setFilterDate(d);
+    });
+  }, [searchParams]);
 
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<JobRow | null>(null);
   const [suggestLoading, setSuggestLoading] = React.useState(false);
+
+  const [replaceOpen, setReplaceOpen] = React.useState(false);
+  const [replaceJob, setReplaceJob] = React.useState<JobRow | null>(null);
+  const [replaceCandidates, setReplaceCandidates] = React.useState<ReplacementCandidate[]>([]);
+  const [replaceHistory, setReplaceHistory] = React.useState<ReplacementHistoryRow[]>([]);
+  const [replaceLoading, setReplaceLoading] = React.useState(false);
+  const [replaceBusy, setReplaceBusy] = React.useState(false);
+  const [replacePick, setReplacePick] = React.useState("");
+  const [replaceReason, setReplaceReason] = React.useState("");
+
+  const [ratingOpen, setRatingOpen] = React.useState(false);
+  const [ratingJob, setRatingJob] = React.useState<JobRow | null>(null);
+  const [ratingRw, setRatingRw] = React.useState("__none__");
+  const [ratingWc, setRatingWc] = React.useState("__none__");
+  const [ratingRwComment, setRatingRwComment] = React.useState("");
+  const [ratingWcComment, setRatingWcComment] = React.useState("");
+  const [ratingBusy, setRatingBusy] = React.useState(false);
+
+  const [smartAssignOpen, setSmartAssignOpen] = React.useState(false);
+  const [smartAssignLoading, setSmartAssignLoading] = React.useState(false);
+  const [smartAssignRows, setSmartAssignRows] = React.useState<SmartSuggestionRow[]>([]);
 
   const [form, setForm] = React.useState({
     client_id: "",
@@ -124,6 +207,8 @@ export default function JobsView() {
     if (filterClient !== "__all__") params.set("client_id", filterClient);
     if (filterWorker !== "__all__") params.set("worker_id", filterWorker);
     if (filterJobType !== "__all__") params.set("job_type_id", filterJobType);
+    if (filterBilling === "uninvoiced") params.set("uninvoiced", "1");
+    if (filterRecurringSeries) params.set("recurring_series_id", filterRecurringSeries);
     const res = await fetch(`/api/jobs?${params.toString()}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to load jobs");
@@ -195,7 +280,7 @@ export default function JobsView() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadJobs closes over filters
-  }, [filterDate, filterClient, filterWorker, filterJobType]);
+  }, [filterDate, filterClient, filterWorker, filterJobType, filterBilling, filterRecurringSeries]);
 
   function dayInputValue(day: string) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
@@ -402,6 +487,194 @@ export default function JobsView() {
     }
   }
 
+  async function openReplace(row: JobRow) {
+    setReplaceJob(row);
+    setReplaceOpen(true);
+    setReplaceCandidates([]);
+    setReplaceHistory([]);
+    setReplacePick("");
+    setReplaceReason("");
+    setReplaceLoading(true);
+    try {
+      const [cRes, hRes] = await Promise.all([
+        fetch(`/api/jobs/${row.id}/replacement-candidates`),
+        fetch(`/api/jobs/${row.id}/replacements`),
+      ]);
+      const cJson = await cRes.json();
+      if (!cRes.ok) throw new Error(cJson.error || "Could not load candidates");
+      setReplaceCandidates((cJson.candidates ?? []) as ReplacementCandidate[]);
+      const hJson = await hRes.json().catch(() => ({}));
+      const hist = hRes.ok && Array.isArray(hJson.history) ? hJson.history : [];
+      setReplaceHistory(hist as ReplacementHistoryRow[]);
+      if (!hRes.ok) {
+        toast.warning("Replacement history could not be loaded.");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not open replacement");
+      setReplaceOpen(false);
+      setReplaceJob(null);
+    } finally {
+      setReplaceLoading(false);
+    }
+  }
+
+  async function submitReplace(auto: boolean) {
+    if (!replaceJob) return;
+    if (!auto && !replacePick) {
+      toast.error("Select a replacement worker");
+      return;
+    }
+    setReplaceBusy(true);
+    try {
+      const body: Record<string, unknown> = {};
+      if (replaceReason.trim()) body.reason = replaceReason.trim();
+      if (auto) body.auto = true;
+      else body.worker_id = replacePick;
+
+      const res = await fetch(`/api/jobs/${replaceJob.id}/replace-worker`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Replacement failed");
+      toast.success(auto ? "Assigned best available worker" : "Worker replaced");
+      setReplaceOpen(false);
+      setReplaceJob(null);
+      await reloadJobs();
+      const wRes = await fetch("/api/workers");
+      const wJson = await wRes.json();
+      if (wRes.ok) {
+        setWorkers(
+          wJson.map((w: { id: string; full_name: string; status: string }) => ({
+            id: w.id,
+            full_name: w.full_name,
+            status: w.status,
+          })),
+        );
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Replacement failed");
+    } finally {
+      setReplaceBusy(false);
+    }
+  }
+
+  async function loadSmartSuggestions() {
+    if (
+      !form.client_id ||
+      !form.date ||
+      !form.job_type_id ||
+      !form.time_start ||
+      !form.time_end
+    ) {
+      toast.error("Select client, job type, date, and start/end times first.");
+      return;
+    }
+    setSmartAssignOpen(true);
+    setSmartAssignLoading(true);
+    setSmartAssignRows([]);
+    try {
+      const body: Record<string, unknown> = {
+        client_id: form.client_id,
+        date: form.date,
+        time_start: form.time_start,
+        time_end: form.time_end,
+        job_type_id: form.job_type_id,
+      };
+      if (editing?.id) body.exclude_job_id = editing.id;
+      const res = await fetch("/api/jobs/suggest-workers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Suggestions failed");
+      const rows = (data.suggestions ?? []) as SmartSuggestionRow[];
+      setSmartAssignRows(rows);
+      if (rows.length === 0) {
+        toast.message("No eligible workers for this slot.");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Suggestions failed");
+      setSmartAssignOpen(false);
+    } finally {
+      setSmartAssignLoading(false);
+    }
+  }
+
+  function pickSmartWorker(row: SmartSuggestionRow) {
+    setForm((f) => ({ ...f, worker_id: row.id }));
+    setSmartAssignOpen(false);
+    const bits = [
+      row.status === "available" ? "available" : "assigned",
+      `★${row.effective_rating}`,
+      row.skill_matches_job_type ? "skill match" : null,
+    ].filter(Boolean);
+    toast.success(`Worker set to ${row.full_name} (score ${row.score}/100 — ${bits.join(", ")})`);
+  }
+
+  function openRatings(row: JobRow) {
+    setRatingJob(row);
+    setRatingRw(row.worker_rating_by_client != null ? String(row.worker_rating_by_client) : "__none__");
+    setRatingWc(row.client_rating_by_worker != null ? String(row.client_rating_by_worker) : "__none__");
+    setRatingRwComment(row.worker_rating_by_client_comment ?? "");
+    setRatingWcComment(row.client_rating_by_worker_comment ?? "");
+    setRatingOpen(true);
+  }
+
+  async function submitRatings() {
+    if (!ratingJob) return;
+    const effRw =
+      ratingRw !== "__none__" ? Number(ratingRw) : ratingJob.worker_rating_by_client;
+    const effWc =
+      ratingWc !== "__none__" ? Number(ratingWc) : ratingJob.client_rating_by_worker;
+    if (ratingRwComment.trim() && (effRw == null || effRw < 1)) {
+      toast.error("Client → worker: add stars before saving a comment.");
+      return;
+    }
+    if (ratingWcComment.trim() && (effWc == null || effWc < 1)) {
+      toast.error("Worker → client: add stars before saving a comment.");
+      return;
+    }
+    setRatingBusy(true);
+    try {
+      const payload: Record<string, unknown> = {
+        worker_rating_by_client_comment: ratingRwComment,
+        client_rating_by_worker_comment: ratingWcComment,
+      };
+      if (ratingRw !== "__none__") payload.worker_rating_by_client = Number(ratingRw);
+      if (ratingWc !== "__none__") payload.client_rating_by_worker = Number(ratingWc);
+
+      const res = await fetch(`/api/jobs/${ratingJob.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save ratings");
+      toast.success("Ratings saved");
+      setRatingOpen(false);
+      setRatingJob(null);
+      await reloadJobs();
+      const wRes = await fetch("/api/workers");
+      const wJson = await wRes.json();
+      if (wRes.ok) {
+        setWorkers(
+          wJson.map((w: { id: string; full_name: string; status: string }) => ({
+            id: w.id,
+            full_name: w.full_name,
+            status: w.status,
+          })),
+        );
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save ratings");
+    } finally {
+      setRatingBusy(false);
+    }
+  }
+
   const workerOptionsForEdit = React.useMemo(() => {
     if (!editing) return selectableWorkers;
     const current = workers.find((w) => w.id === editing.worker_id);
@@ -431,6 +704,28 @@ export default function JobsView() {
           New job
         </Button>
       </div>
+
+      {filterRecurringSeries ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+          <span className="text-muted-foreground">Showing jobs from one recurring series.</span>
+          <Button
+            variant="outline"
+            size="xs"
+            type="button"
+            onClick={() => {
+              router.replace("/jobs");
+            }}
+          >
+            Clear series filter
+          </Button>
+          <Link
+            href="/recurring"
+            className={cn(buttonVariants({ variant: "secondary", size: "xs" }))}
+          >
+            Recurring bookings
+          </Link>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end">
         <div className="grid gap-2">
@@ -501,6 +796,23 @@ export default function JobsView() {
             </SelectContent>
           </Select>
         </div>
+        <div className="grid gap-2">
+          <Label>Billing</Label>
+          <Select
+            value={filterBilling}
+            onValueChange={(v) =>
+              setFilterBilling(v === "uninvoiced" ? "uninvoiced" : "__all__")
+            }
+          >
+            <SelectTrigger className="lg:w-52">
+              <SelectValue placeholder="All jobs" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All jobs</SelectItem>
+              <SelectItem value="uninvoiced">Not on invoice yet</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <Button
           variant="outline"
           onClick={() => {
@@ -508,6 +820,7 @@ export default function JobsView() {
             setFilterClient("__all__");
             setFilterWorker("__all__");
             setFilterJobType("__all__");
+            setFilterBilling("__all__");
           }}
         >
           Clear filters
@@ -525,21 +838,25 @@ export default function JobsView() {
               <TableHead>Time</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Payment</TableHead>
+              <TableHead>Invoice</TableHead>
               <TableHead>Profit</TableHead>
               <TableHead className="tabular-nums">Margin</TableHead>
+              <TableHead className="whitespace-nowrap text-center text-muted-foreground">
+                C★ / W★
+              </TableHead>
               <TableHead className="min-w-[220px] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-muted-foreground">
+                <TableCell colSpan={12} className="text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-muted-foreground">
+                <TableCell colSpan={12} className="text-muted-foreground">
                   No jobs match these filters.
                 </TableCell>
               </TableRow>
@@ -563,6 +880,15 @@ export default function JobsView() {
                       {row.payment_status}
                     </Badge>
                   </TableCell>
+                  <TableCell>
+                    {row.invoice_id ? (
+                      <Badge variant="outline" className="font-normal">
+                        Invoiced
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground text-sm">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="tabular-nums">
                     {row.profit != null && Number.isFinite(row.profit)
                       ? phpCurrencyFormatter.format(row.profit)
@@ -573,9 +899,20 @@ export default function JobsView() {
                       ? `${row.margin_pct}%`
                       : "—"}
                   </TableCell>
+                  <TableCell className="text-center text-xs tabular-nums text-muted-foreground">
+                    <span title="Client rated worker">
+                      {row.worker_rating_by_client != null ? `★${row.worker_rating_by_client}` : "—"}
+                    </span>
+                    <span className="mx-0.5 opacity-50">/</span>
+                    <span title="Worker rated client">
+                      {row.client_rating_by_worker != null ? `★${row.client_rating_by_worker}` : "—"}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex flex-wrap justify-end gap-1">
-                      {row.payment_status === "pending" && row.status !== "cancelled" && (
+                      {row.payment_status === "pending" &&
+                        row.status !== "cancelled" &&
+                        !row.invoice_id && (
                         <Button
                           size="xs"
                           variant="secondary"
@@ -591,6 +928,27 @@ export default function JobsView() {
                           onClick={() => patchJob(row.id, { status: "completed" })}
                         >
                           Complete
+                        </Button>
+                      )}
+                      {row.status !== "completed" && row.status !== "cancelled" && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => openReplace(row)}
+                          title="Auto-replacement"
+                        >
+                          <ArrowLeftRight className="size-3" />
+                          Replace
+                        </Button>
+                      )}
+                      {row.status === "completed" && (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => openRatings(row)}
+                          title="Mutual ratings"
+                        >
+                          <Star className="size-3" />
                         </Button>
                       )}
                       <Button size="icon-sm" variant="ghost" onClick={() => openEdit(row)}>
@@ -635,27 +993,51 @@ export default function JobsView() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid gap-2">
-              <Label>Worker</Label>
-              <Select
-                value={form.worker_id}
-                onValueChange={(v) => {
-                  if (typeof v !== "string") return;
-                  setForm((f) => ({ ...f, worker_id: v }));
-                }}
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+              <div className="grid gap-2">
+                <Label>Worker</Label>
+                <Select
+                  value={form.worker_id}
+                  onValueChange={(v) => {
+                    if (typeof v !== "string") return;
+                    setForm((f) => ({ ...f, worker_id: v }));
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select worker" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(editing ? workerOptionsForEdit : selectableWorkers).map((w) => (
+                      <SelectItem key={w.id} value={w.id}>
+                        {w.full_name}
+                        {w.status === "inactive" ? " (inactive)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                className="gap-1.5 sm:mb-0.5"
+                disabled={
+                  smartAssignLoading ||
+                  !form.client_id ||
+                  !form.date ||
+                  !form.job_type_id ||
+                  !form.time_start ||
+                  !form.time_end
+                }
+                title="Rank workers: location vs client address, skill, availability, rating (100 pts)."
+                onClick={() => void loadSmartSuggestions()}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select worker" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(editing ? workerOptionsForEdit : selectableWorkers).map((w) => (
-                    <SelectItem key={w.id} value={w.id}>
-                      {w.full_name}
-                      {w.status === "inactive" ? " (inactive)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                {smartAssignLoading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+                Smart picks
+              </Button>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="job_date">Date</Label>
@@ -809,6 +1191,332 @@ export default function JobsView() {
               Cancel
             </Button>
             <Button onClick={save}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={replaceOpen}
+        onOpenChange={(o) => {
+          setReplaceOpen(o);
+          if (!o) setReplaceJob(null);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="size-4 opacity-80" />
+              Auto-replacement
+            </DialogTitle>
+          </DialogHeader>
+          {replaceJob ? (
+            <div className="grid gap-4 py-2">
+              <div className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+                <p className="font-medium">
+                  {replaceJob.client_name ?? "Client"} · {formatDisplayDay(replaceJob.date)}
+                </p>
+                <p className="text-muted-foreground">
+                  Current: {replaceJob.worker_name ?? replaceJob.worker_id} · {replaceJob.time_start}–
+                  {replaceJob.time_end}
+                </p>
+              </div>
+
+              {replaceLoading ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Finding eligible workers…
+                </p>
+              ) : replaceCandidates.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No workers are free for this slot (excluding inactive and overlapping bookings).
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Ranked by location vs client address, skill vs job type, availability, and rating
+                    (100-point score). Auto-assign picks the top row.
+                  </p>
+                  <div className="max-h-48 overflow-y-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Worker</TableHead>
+                          <TableHead>Skill</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right whitespace-nowrap">Job ★</TableHead>
+                          <TableHead className="text-right">Ops</TableHead>
+                          <TableHead className="text-right tabular-nums">Score</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {replaceCandidates.map((c) => (
+                          <TableRow key={c.id}>
+                            <TableCell className="font-medium">{c.full_name || c.id}</TableCell>
+                            <TableCell className="text-muted-foreground">{c.skill}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="font-normal">
+                                {c.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {c.rated_by_clients_avg != null ? `★${c.rated_by_clients_avg}` : "—"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{c.rating}</TableCell>
+                            <TableCell className="text-right tabular-nums text-muted-foreground">
+                              {c.score}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Assign manually</Label>
+                    <Select
+                      value={replacePick || "__pick__"}
+                      onValueChange={(v) =>
+                        setReplacePick(typeof v === "string" && v !== "__pick__" ? v : "")
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose worker" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__pick__">Select…</SelectItem>
+                        {replaceCandidates.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.full_name || c.id} (score {c.score}, job ★
+                            {c.rated_by_clients_avg ?? "—"}, ops {c.rating})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+
+              <div className="grid gap-2">
+                <Label htmlFor="rep_reason">Note (optional)</Label>
+                <Textarea
+                  id="rep_reason"
+                  value={replaceReason}
+                  onChange={(e) => setReplaceReason(e.target.value)}
+                  placeholder="e.g. No-show, requested swap…"
+                  rows={2}
+                />
+              </div>
+
+              {replaceHistory.length > 0 ? (
+                <div className="grid gap-2">
+                  <Label className="text-muted-foreground">Past swaps on this job</Label>
+                  <ul className="max-h-32 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                    {replaceHistory.map((h) => (
+                      <li key={h.id}>
+                        {h.created_at ? new Date(h.created_at).toLocaleString() : "—"}:{" "}
+                        {h.from_worker_name || "?"} → {h.to_worker_name || "?"}
+                        {h.reason ? ` — ${h.reason}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setReplaceOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={
+                replaceBusy || replaceLoading || replaceCandidates.length === 0 || !replaceJob
+              }
+              onClick={() => void submitReplace(true)}
+            >
+              {replaceBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+              Assign best
+            </Button>
+            <Button
+              disabled={replaceBusy || replaceLoading || !replacePick || !replaceJob}
+              onClick={() => void submitReplace(false)}
+            >
+              {replaceBusy ? <Loader2 className="animate-spin size-4" /> : null}
+              Assign selected
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={ratingOpen}
+        onOpenChange={(o) => {
+          setRatingOpen(o);
+          if (!o) setRatingJob(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Star className="size-4 opacity-80" />
+              Visit ratings
+            </DialogTitle>
+          </DialogHeader>
+          {ratingJob ? (
+            <div className="grid gap-5 py-2">
+              <p className="text-sm text-muted-foreground">
+                Record the client&apos;s rating of the worker and the worker&apos;s rating of the
+                client for this completed visit. Rolling averages appear on worker and client
+                profiles.
+              </p>
+              <div className="grid gap-2">
+                <Label>Client rates worker</Label>
+                <Select
+                  value={ratingRw}
+                  onValueChange={(v) => typeof v === "string" && setRatingRw(v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Stars" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} star{n === 1 ? "" : "s"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Textarea
+                  value={ratingRwComment}
+                  onChange={(e) => setRatingRwComment(e.target.value)}
+                  placeholder="Optional comment"
+                  rows={2}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Worker rates client</Label>
+                <Select
+                  value={ratingWc}
+                  onValueChange={(v) => typeof v === "string" && setRatingWc(v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Stars" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Not set</SelectItem>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} star{n === 1 ? "" : "s"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Textarea
+                  value={ratingWcComment}
+                  onChange={(e) => setRatingWcComment(e.target.value)}
+                  placeholder="Optional comment"
+                  rows={2}
+                />
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRatingOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={ratingBusy || !ratingJob} onClick={() => void submitRatings()}>
+              {ratingBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+              Save ratings
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={smartAssignOpen} onOpenChange={setSmartAssignOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="size-4 opacity-80" />
+              Smart assignment
+            </DialogTitle>
+          </DialogHeader>
+          {smartAssignLoading ? (
+            <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Ranking workers…
+            </p>
+          ) : smartAssignRows.length === 0 ? (
+            <p className="py-2 text-sm text-muted-foreground">
+              No workers are free for this slot (inactive and overlapping bookings excluded).
+            </p>
+          ) : (
+            <div className="grid gap-3 py-2">
+              <p className="text-sm text-muted-foreground">
+                Each factor is scored out of 25 (100 total): <strong>location</strong> (worker vs
+                client address), <strong>skill</strong> (match to job type when inferable),{" "}
+                <strong>availability</strong>, and <strong>rating</strong> (job ★ or ops).
+              </p>
+              <div className="max-h-[min(60vh,420px)] overflow-y-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Worker</TableHead>
+                      <TableHead className="text-center">Status</TableHead>
+                      <TableHead className="text-right tabular-nums whitespace-nowrap">Loc</TableHead>
+                      <TableHead className="text-right tabular-nums whitespace-nowrap">Skill</TableHead>
+                      <TableHead className="text-right tabular-nums whitespace-nowrap">Avail</TableHead>
+                      <TableHead className="text-right tabular-nums whitespace-nowrap">Rate</TableHead>
+                      <TableHead className="text-right tabular-nums whitespace-nowrap">Σ</TableHead>
+                      <TableHead className="w-[72px]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {smartAssignRows.map((r, i) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">
+                          <span className="text-muted-foreground tabular-nums">#{i + 1}</span>{" "}
+                          {r.full_name}
+                          <span className="mt-0.5 block text-xs capitalize text-muted-foreground">
+                            {r.skill}
+                            {r.preferred_skill ? (
+                              <> · job prefers {r.preferred_skill}</>
+                            ) : null}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge variant="outline" className="font-normal capitalize">
+                            {r.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {r.breakdown.location}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {r.breakdown.skill}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {r.breakdown.availability}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {r.breakdown.rating}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums font-medium">{r.score}</TableCell>
+                        <TableCell className="pr-2">
+                          <Button size="xs" variant="secondary" onClick={() => pickSmartWorker(r)}>
+                            Use
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSmartAssignOpen(false)}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

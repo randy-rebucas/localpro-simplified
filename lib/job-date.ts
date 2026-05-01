@@ -32,3 +32,17 @@ export function formatJobDay(value: Date | string): string {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
+
+/** Every calendar day from `fromStr` through `toStr` inclusive (`YYYY-MM-DD`), local timezone. */
+export function enumerateCalendarDaysInclusive(fromStr: string, toStr: string): string[] {
+  const from = parseJobDateInput(fromStr);
+  const to = parseJobDateInput(toStr);
+  const out: string[] = [];
+  const cur = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 12, 0, 0, 0);
+  const end = new Date(to.getFullYear(), to.getMonth(), to.getDate(), 12, 0, 0, 0);
+  while (cur <= end) {
+    out.push(formatJobDay(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}

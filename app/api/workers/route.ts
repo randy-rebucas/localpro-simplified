@@ -17,6 +17,8 @@ export function serializeWorker(doc: {
   skill: string;
   status: string;
   rating: number;
+  rated_by_clients_avg?: number | null;
+  rated_by_clients_count?: number;
   notes: string;
   user_id: mongoose.Types.ObjectId | PopulatedWorkerUser;
   created_at?: Date;
@@ -37,6 +39,10 @@ export function serializeWorker(doc: {
     skill: doc.skill,
     status: doc.status,
     rating: doc.rating,
+    rated_by_clients_avg:
+      typeof doc.rated_by_clients_avg === "number" ? doc.rated_by_clients_avg : null,
+    rated_by_clients_count:
+      typeof doc.rated_by_clients_count === "number" ? doc.rated_by_clients_count : 0,
     notes: doc.notes,
     created_at: doc.created_at?.toISOString() ?? null,
     updated_at: doc.updated_at?.toISOString() ?? null,

@@ -8,7 +8,19 @@ export default async function DashboardPage() {
   const tiles = [
     { title: "Clients", value: stats.total_clients },
     { title: "Workers", value: stats.total_workers },
+    {
+      title: "Clocked in now",
+      value: stats.clocked_in_now,
+    },
     { title: "Active jobs today", value: stats.active_jobs_today },
+    {
+      title: "Active recurring series",
+      value: stats.active_recurring_series,
+    },
+    {
+      title: "Outstanding invoices",
+      value: phpCurrencyFormatter.format(stats.outstanding_receivable),
+    },
     {
       title: "Total revenue (paid)",
       value: phpCurrencyFormatter.format(stats.total_revenue),
@@ -23,7 +35,7 @@ export default async function DashboardPage() {
           Snapshot of your workforce and bookings.
         </p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {tiles.map((tile) => (
           <Card key={tile.title}>
             <CardHeader className="pb-2">

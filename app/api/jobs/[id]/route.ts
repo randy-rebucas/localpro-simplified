@@ -8,8 +8,14 @@ import { syncWorkerStatusFromJobs } from "@/lib/job-sync";
 import { parseJobDateInput } from "@/lib/job-date";
 import { timeToMinutes } from "@/lib/time-overlap";
 import { JOB_POPULATE } from "@/lib/job-populate";
-import { assertActiveJobType, serializeJob } from "../route";
+import { serializeJob } from "../route";
+import { assertActiveJobType } from "@/lib/job-type-assert";
+import {
+  refreshClientRatedByWorkers,
+  refreshWorkerRatedByClients,
+} from "@/lib/rating-aggregate-sync";
 import { HttpError, jsonUnexpected } from "@/lib/http-error";
+import { notifyWorkerNewAssignment } from "@/lib/notifications/worker-assignment";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -45,6 +51,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const updates: Record<string, unknown> = {};
 
     let nextWorkerId = prev.worker_id as mongoose.Types.ObjectId;
+    let nextClientId = new mongoose.Types.ObjectId(String(prev.client_id));
     let nextDate = prev.date as Date;
     let nextStart = prev.time_start;
     let nextEnd = prev.time_end;
@@ -55,6 +62,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         return NextResponse.json({ error: "Invalid client_id" }, { status: 400 });
       }
       updates.client_id = cid;
+      nextClientId = new mongoose.Types.ObjectId(cid);
     }
 
     if (body.worker_id !== undefined) {
@@ -69,6 +77,44 @@ export async function PATCH(req: Request, ctx: Ctx) {
       }
       updates.worker_id = wid;
       nextWorkerId = new mongoose.Types.ObjectId(wid);
+    }
+
+    if (
+      body.worker_id !== undefined &&
+      String(body.worker_id) !== String(prev.worker_id)
+    ) {
+      const wr =
+        typeof prev.worker_rating_by_client === "number"
+          ? prev.worker_rating_by_client
+          : null;
+      if (wr != null && wr >= 1 && wr <= 5) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot reassign worker after this visit was rated by the client; ratings belong to the assigned worker.",
+          },
+          { status: 400 },
+        );
+      }
+    }
+
+    if (
+      body.client_id !== undefined &&
+      String(body.client_id) !== String(prev.client_id)
+    ) {
+      const cr =
+        typeof prev.client_rating_by_worker === "number"
+          ? prev.client_rating_by_worker
+          : null;
+      if (cr != null && cr >= 1 && cr <= 5) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot change client after this visit was rated by the worker.",
+          },
+          { status: 400 },
+        );
+      }
     }
 
     if (body.date !== undefined) {
@@ -134,7 +180,91 @@ export async function PATCH(req: Request, ctx: Ctx) {
       updates.worker_pay = Number.isFinite(v) ? v : undefined;
     }
 
+    const effectiveStatus =
+      updates.status !== undefined ? String(updates.status) : String(prev.status);
+
+    let touchedWorkerRating = false;
+    let touchedClientRating = false;
+
+    const ratingKeys =
+      body.worker_rating_by_client !== undefined ||
+      body.worker_rating_by_client_comment !== undefined ||
+      body.client_rating_by_worker !== undefined ||
+      body.client_rating_by_worker_comment !== undefined;
+
+    if (ratingKeys && effectiveStatus !== "completed") {
+      return NextResponse.json(
+        { error: "Mutual visit ratings can only be saved when the job is completed" },
+        { status: 400 },
+      );
+    }
+
+    if (body.worker_rating_by_client !== undefined) {
+      const v = Number(body.worker_rating_by_client);
+      if (!Number.isInteger(v) || v < 1 || v > 5) {
+        return NextResponse.json(
+          { error: "worker_rating_by_client must be an integer from 1 to 5" },
+          { status: 400 },
+        );
+      }
+      updates.worker_rating_by_client = v;
+      updates.worker_rating_by_client_at = new Date();
+      touchedWorkerRating = true;
+    }
+
+    if (body.worker_rating_by_client_comment !== undefined) {
+      const text = String(body.worker_rating_by_client_comment ?? "").slice(0, 2000);
+      const starsNow =
+        updates.worker_rating_by_client !== undefined
+          ? (updates.worker_rating_by_client as number)
+          : typeof prev.worker_rating_by_client === "number"
+            ? prev.worker_rating_by_client
+            : null;
+      if (text.trim() && (starsNow == null || starsNow < 1 || starsNow > 5)) {
+        return NextResponse.json(
+          { error: "Set client → worker stars before adding a comment" },
+          { status: 400 },
+        );
+      }
+      updates.worker_rating_by_client_comment = text;
+      touchedWorkerRating = true;
+    }
+
+    if (body.client_rating_by_worker !== undefined) {
+      const v = Number(body.client_rating_by_worker);
+      if (!Number.isInteger(v) || v < 1 || v > 5) {
+        return NextResponse.json(
+          { error: "client_rating_by_worker must be an integer from 1 to 5" },
+          { status: 400 },
+        );
+      }
+      updates.client_rating_by_worker = v;
+      updates.client_rating_by_worker_at = new Date();
+      touchedClientRating = true;
+    }
+
+    if (body.client_rating_by_worker_comment !== undefined) {
+      const text = String(body.client_rating_by_worker_comment ?? "").slice(0, 2000);
+      const starsNow =
+        updates.client_rating_by_worker !== undefined
+          ? (updates.client_rating_by_worker as number)
+          : typeof prev.client_rating_by_worker === "number"
+            ? prev.client_rating_by_worker
+            : null;
+      if (text.trim() && (starsNow == null || starsNow < 1 || starsNow > 5)) {
+        return NextResponse.json(
+          { error: "Set worker → client stars before adding a comment" },
+          { status: 400 },
+        );
+      }
+      updates.client_rating_by_worker_comment = text;
+      touchedClientRating = true;
+    }
+
     const prevWorkerId = new mongoose.Types.ObjectId(String(prev.worker_id));
+
+    const workerReassigned =
+      body.worker_id !== undefined && String(body.worker_id) !== String(prev.worker_id);
 
     const needsOverlapCheck =
       body.worker_id !== undefined ||
@@ -157,13 +287,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
           if (overlap) {
             throw new HttpError(409, "Worker already has an overlapping job at this time");
           }
-          const r = await Job.updateOne({ _id: id }, { $set: updates }).session(session);
-          if (r.matchedCount === 0) throw new HttpError(404, "Not found");
+          if (Object.keys(updates).length > 0) {
+            const r = await Job.updateOne({ _id: id }, { $set: updates }).session(session);
+            if (r.matchedCount === 0) throw new HttpError(404, "Not found");
+          }
         });
       } finally {
         await session.endSession();
       }
-    } else {
+    } else if (Object.keys(updates).length > 0) {
       const updated = await Job.findByIdAndUpdate(id, { $set: updates }, { new: true }).lean();
       if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -173,8 +305,19 @@ export async function PATCH(req: Request, ctx: Ctx) {
       await syncWorkerStatusFromJobs(new mongoose.Types.ObjectId(wid));
     }
 
+    if (touchedWorkerRating) {
+      await refreshWorkerRatedByClients(nextWorkerId);
+    }
+    if (touchedClientRating) {
+      await refreshClientRatedByWorkers(nextClientId);
+    }
+
     const populated = await Job.findById(id).populate(JOB_POPULATE).lean();
     if (!populated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    if (workerReassigned) {
+      void notifyWorkerNewAssignment(new mongoose.Types.ObjectId(id));
+    }
 
     return NextResponse.json(
       serializeJob(populated as Parameters<typeof serializeJob>[0]),
@@ -199,8 +342,24 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     const prev = await Job.findById(id).lean();
     if (!prev) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+    const hadClientToWorker =
+      typeof prev.worker_rating_by_client === "number" &&
+      prev.worker_rating_by_client >= 1 &&
+      prev.worker_rating_by_client <= 5;
+    const hadWorkerToClient =
+      typeof prev.client_rating_by_worker === "number" &&
+      prev.client_rating_by_worker >= 1 &&
+      prev.client_rating_by_worker <= 5;
+
     await Job.findByIdAndDelete(id);
     await syncWorkerStatusFromJobs(prev.worker_id as mongoose.Types.ObjectId);
+
+    if (hadClientToWorker) {
+      await refreshWorkerRatedByClients(prev.worker_id as mongoose.Types.ObjectId);
+    }
+    if (hadWorkerToClient) {
+      await refreshClientRatedByWorkers(prev.client_id as mongoose.Types.ObjectId);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e) {

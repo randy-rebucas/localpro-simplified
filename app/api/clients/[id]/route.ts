@@ -56,7 +56,25 @@ export async function PATCH(req: Request, ctx: Ctx) {
       clientUpdates.status = body.status;
     }
 
-    await Client.findByIdAndUpdate(id, { $set: clientUpdates });
+    let unsetPortal = false;
+    if (body.portal_password !== undefined) {
+      const raw = typeof body.portal_password === "string" ? body.portal_password.trim() : "";
+      if (raw === "") {
+        unsetPortal = true;
+        clientUpdates.portal_enabled = false;
+      } else {
+        clientUpdates.portal_password = raw.slice(0, 256);
+        clientUpdates.portal_enabled = true;
+      }
+    }
+
+    const updateOps: mongoose.UpdateQuery<unknown> = {};
+    if (Object.keys(clientUpdates).length > 0) updateOps.$set = clientUpdates;
+    if (unsetPortal) updateOps.$unset = { portal_password: 1 };
+
+    if (Object.keys(updateOps).length > 0) {
+      await Client.findByIdAndUpdate(id, updateOps);
+    }
 
     const doc = await Client.findById(id).populate("contact_user_id").lean();
     if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 });

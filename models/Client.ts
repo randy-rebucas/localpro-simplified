@@ -17,6 +17,13 @@ const ClientSchema = new Schema(
       default: "prospect",
     },
     notes: { type: String, default: "", maxlength: 8000 },
+    /** Plain portal password; omitted from queries unless explicitly selected. */
+    portal_password: { type: String, trim: true, maxlength: 256, select: false },
+    /** True when `portal_password` is set (maintained by API). */
+    portal_enabled: { type: Boolean, default: false },
+    /** Rolling average (rounded) of client_rating_by_worker on completed jobs; maintained by API. */
+    rated_by_workers_avg: { type: Number, min: 1, max: 5 },
+    rated_by_workers_count: { type: Number, default: 0 },
   },
   {
     versionKey: false,

@@ -2,7 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, ClipboardList, LayoutDashboard, Percent, Tags, UsersRound } from "lucide-react";
+import {
+  AlertTriangle,
+  Building2,
+  CalendarClock,
+  CalendarDays,
+  ClipboardList,
+  LayoutDashboard,
+  Percent,
+  Receipt,
+  Tags,
+  Timer,
+  UsersRound,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { LogoutButton } from "@/components/logout-button";
@@ -12,7 +24,12 @@ const items = [
   { href: "/clients", label: "Clients", icon: Building2 },
   { href: "/job-types", label: "Job types", icon: Tags },
   { href: "/workers", label: "Workers", icon: UsersRound },
+  { href: "/worker-schedule", label: "Availability", icon: CalendarDays },
   { href: "/jobs", label: "Jobs", icon: ClipboardList },
+  { href: "/recurring", label: "Recurring", icon: CalendarClock },
+  { href: "/attendance", label: "Attendance", icon: Timer },
+  { href: "/incidents", label: "Incidents", icon: AlertTriangle },
+  { href: "/invoices", label: "Invoices", icon: Receipt },
   { href: "/rates", label: "Rate & margin", icon: Percent },
 ];
 

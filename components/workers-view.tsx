@@ -41,6 +41,8 @@ type WorkerRow = {
   skill: "cleaner" | "helper" | "technician";
   status: "available" | "assigned" | "inactive";
   rating: number;
+  rated_by_clients_avg: number | null;
+  rated_by_clients_count: number;
   notes: string;
   created_at: string | null;
 };
@@ -210,7 +212,8 @@ export default function WorkersView() {
               <TableHead>Email</TableHead>
               <TableHead>Skill</TableHead>
               <TableHead>Location</TableHead>
-              <TableHead>Rating</TableHead>
+              <TableHead className="whitespace-nowrap">Ops ★</TableHead>
+              <TableHead className="whitespace-nowrap">Clients ★</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[120px] text-right">Actions</TableHead>
             </TableRow>
@@ -218,13 +221,13 @@ export default function WorkersView() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground">
+                <TableCell colSpan={8} className="text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground">
+                <TableCell colSpan={8} className="text-muted-foreground">
                   No workers yet.
                 </TableCell>
               </TableRow>
@@ -238,6 +241,16 @@ export default function WorkersView() {
                   <TableCell>{row.skill}</TableCell>
                   <TableCell>{row.location}</TableCell>
                   <TableCell>{row.rating}</TableCell>
+                  <TableCell className="text-sm tabular-nums">
+                    {row.rated_by_clients_avg != null ? (
+                      <>
+                        ★{row.rated_by_clients_avg}{" "}
+                        <span className="text-muted-foreground">({row.rated_by_clients_count})</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
                   </TableCell>
@@ -341,7 +354,7 @@ export default function WorkersView() {
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="rating">Rating (1–5)</Label>
+              <Label htmlFor="rating">Ops rating (1–5)</Label>
               <Input
                 id="rating"
                 type="number"
