@@ -9,6 +9,7 @@ import { parseAssignmentDateInput } from "@/lib/assignment-date";
 import { timeToMinutes } from "@/lib/time-overlap";
 import { ASSIGNMENT_POPULATE } from "@/lib/assignment-populate";
 import { serializeAssignment } from "../route";
+import { HttpError, jsonUnexpected } from "@/lib/http-error";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -23,12 +24,12 @@ export async function GET(_req: Request, ctx: Ctx) {
     if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(serializeAssignment(doc as Parameters<typeof serializeAssignment>[0]));
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUnexpected("GET /api/assignments/[id]", e);
   }
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {
+  const ROUTE = "PATCH /api/assignments/[id]";
   try {
     await connectDB();
     const { id } = await ctx.params;
@@ -96,27 +97,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "time_end must be after time_start (HH:mm)" }, { status: 400 });
     }
 
-    if (
-      body.worker_id !== undefined ||
-      body.date !== undefined ||
-      body.time_start !== undefined ||
-      body.time_end !== undefined
-    ) {
-      const overlap = await findTimeOverlapForWorker(
-        nextWorkerId,
-        nextDate,
-        nextStart,
-        nextEnd,
-        new mongoose.Types.ObjectId(id),
-      );
-      if (overlap) {
-        return NextResponse.json(
-          { error: "Worker already has an overlapping assignment at this time" },
-          { status: 409 },
-        );
-      }
-    }
-
     if (body.job_type !== undefined) updates.job_type = String(body.job_type);
     if (body.notes !== undefined) updates.notes = String(body.notes);
 
@@ -145,7 +125,37 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     const prevWorkerId = new mongoose.Types.ObjectId(String(prev.worker_id));
 
-    await Assignment.findByIdAndUpdate(id, { $set: updates });
+    const needsOverlapCheck =
+      body.worker_id !== undefined ||
+      body.date !== undefined ||
+      body.time_start !== undefined ||
+      body.time_end !== undefined;
+
+    if (needsOverlapCheck) {
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const overlap = await findTimeOverlapForWorker(
+            nextWorkerId,
+            nextDate,
+            nextStart,
+            nextEnd,
+            new mongoose.Types.ObjectId(id),
+            session,
+          );
+          if (overlap) {
+            throw new HttpError(409, "Worker already has an overlapping assignment at this time");
+          }
+          const r = await Assignment.updateOne({ _id: id }, { $set: updates }).session(session);
+          if (r.matchedCount === 0) throw new HttpError(404, "Not found");
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      const updated = await Assignment.findByIdAndUpdate(id, { $set: updates }, { new: true }).lean();
+      if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
 
     const workersToSync = new Set<string>([prevWorkerId.toString(), nextWorkerId.toString()]);
     for (const wid of workersToSync) {
@@ -153,17 +163,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
 
     const populated = await Assignment.findById(id).populate(ASSIGNMENT_POPULATE).lean();
+    if (!populated) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     return NextResponse.json(
       serializeAssignment(populated as Parameters<typeof serializeAssignment>[0]),
     );
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 400 });
+    if (e instanceof HttpError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    return jsonUnexpected(ROUTE, e);
   }
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {
+  const ROUTE = "DELETE /api/assignments/[id]";
   try {
     await connectDB();
     const { id } = await ctx.params;
@@ -179,7 +193,6 @@ export async function DELETE(_req: Request, ctx: Ctx) {
 
     return NextResponse.json({ ok: true });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUnexpected(ROUTE, e);
   }
 }

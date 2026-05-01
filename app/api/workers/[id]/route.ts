@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { connectDB } from "@/lib/mongodb";
+import { Assignment } from "@/models/Assignment";
 import { Worker } from "@/models/Worker";
 import { User } from "@/models/User";
+import { jsonUnexpected } from "@/lib/http-error";
 import { serializeWorker } from "../route";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -71,18 +73,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {
+  const ROUTE = "DELETE /api/workers/[id]";
   try {
     await connectDB();
     const { id } = await ctx.params;
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
-    const res = await Worker.findByIdAndDelete(id);
-    if (!res) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    await User.findByIdAndDelete(res.user_id);
+    const existing = await Worker.findById(id).lean();
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    const oid = new mongoose.Types.ObjectId(id);
+    await Assignment.deleteMany({ worker_id: oid });
+
+    await Worker.deleteOne({ _id: oid });
+    await User.deleteOne({ _id: existing.user_id });
     return NextResponse.json({ ok: true });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUnexpected(ROUTE, e);
   }
 }

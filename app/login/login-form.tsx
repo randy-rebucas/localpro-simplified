@@ -15,6 +15,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
+/** Blocks protocol-relative and absolute URLs (open-redirect hardening). */
+function safePostLoginPath(from: string | null): string {
+  if (!from) return "/dashboard";
+  if (!from.startsWith("/") || from.startsWith("//")) return "/dashboard";
+  return from;
+}
+
 export default function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -35,7 +42,7 @@ export default function LoginForm() {
         toast.error(typeof data.error === "string" ? data.error : "Login failed");
         return;
       }
-      const next = searchParams.get("from") || "/dashboard";
+      const next = safePostLoginPath(searchParams.get("from"));
       router.push(next);
       router.refresh();
     } finally {

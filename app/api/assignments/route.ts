@@ -8,6 +8,7 @@ import { findTimeOverlapForWorker } from "@/lib/assignment-queries";
 import { syncWorkerStatusFromAssignments } from "@/lib/assignment-sync";
 import { formatAssignmentDay, parseAssignmentDateInput } from "@/lib/assignment-date";
 import { timeToMinutes } from "@/lib/time-overlap";
+import { HttpError, jsonUnexpected } from "@/lib/http-error";
 
 type PopulatedClient = { _id: mongoose.Types.ObjectId; business_name?: string };
 type PopulatedWorkerRow = {
@@ -129,12 +130,12 @@ export async function GET(req: Request) {
 
     return NextResponse.json(rows.map((row) => serializeAssignment(row as Parameters<typeof serializeAssignment>[0])));
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUnexpected("GET /api/assignments", e);
   }
 }
 
 export async function POST(req: Request) {
+  const ROUTE = "POST /api/assignments";
   try {
     await connectDB();
     const body = await req.json();
@@ -143,14 +144,6 @@ export async function POST(req: Request) {
     const worker_id = body.worker_id as string;
     if (!mongoose.isValidObjectId(client_id) || !mongoose.isValidObjectId(worker_id)) {
       return NextResponse.json({ error: "Invalid client_id or worker_id" }, { status: 400 });
-    }
-
-    const worker = await Worker.findById(worker_id);
-    if (!worker) {
-      return NextResponse.json({ error: "Worker not found" }, { status: 404 });
-    }
-    if (worker.status === "inactive") {
-      return NextResponse.json({ error: "Cannot assign an inactive worker" }, { status: 400 });
     }
 
     let date: Date;
@@ -166,19 +159,6 @@ export async function POST(req: Request) {
     const te = timeToMinutes(time_end);
     if (!Number.isFinite(ts) || !Number.isFinite(te) || te <= ts) {
       return NextResponse.json({ error: "time_end must be after time_start (HH:mm)" }, { status: 400 });
-    }
-
-    const overlap = await findTimeOverlapForWorker(
-      new mongoose.Types.ObjectId(worker_id),
-      date,
-      time_start,
-      time_end,
-    );
-    if (overlap) {
-      return NextResponse.json(
-        { error: "Worker already has an overlapping assignment at this time" },
-        { status: 409 },
-      );
     }
 
     const status = ["assigned", "in_progress", "completed", "cancelled"].includes(body.status)
@@ -197,30 +177,70 @@ export async function POST(req: Request) {
         ? Number(body.worker_pay)
         : undefined;
 
-    const doc = await Assignment.create({
-      client_id,
-      worker_id,
-      date,
-      job_type: String(body.job_type ?? "cleaning"),
-      time_start,
-      time_end,
-      status,
-      payment_status,
-      notes: String(body.notes ?? ""),
-      ...(Number.isFinite(client_price) && client_price !== undefined ? { client_price } : {}),
-      ...(Number.isFinite(worker_pay) && worker_pay !== undefined ? { worker_pay } : {}),
-    });
+    const workerOid = new mongoose.Types.ObjectId(worker_id);
 
-    await syncWorkerStatusFromAssignments(new mongoose.Types.ObjectId(worker_id));
+    const session = await mongoose.startSession();
+    let createdId: mongoose.Types.ObjectId | null = null;
 
-    const populated = await Assignment.findById(doc._id).populate(ASSIGNMENT_POPULATE).lean();
+    try {
+      await session.withTransaction(async () => {
+        const worker = await Worker.findById(worker_id).session(session).exec();
+        if (!worker) throw new HttpError(404, "Worker not found");
+        if (worker.status === "inactive") {
+          throw new HttpError(400, "Cannot assign an inactive worker");
+        }
+
+        const overlap = await findTimeOverlapForWorker(
+          workerOid,
+          date,
+          time_start,
+          time_end,
+          undefined,
+          session,
+        );
+        if (overlap) {
+          throw new HttpError(409, "Worker already has an overlapping assignment at this time");
+        }
+
+        const created = await Assignment.create(
+          [
+            {
+              client_id,
+              worker_id,
+              date,
+              job_type: String(body.job_type ?? "cleaning"),
+              time_start,
+              time_end,
+              status,
+              payment_status,
+              notes: String(body.notes ?? ""),
+              ...(Number.isFinite(client_price) && client_price !== undefined ? { client_price } : {}),
+              ...(Number.isFinite(worker_pay) && worker_pay !== undefined ? { worker_pay } : {}),
+            },
+          ],
+          { session },
+        );
+        createdId = created[0]!._id as mongoose.Types.ObjectId;
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    await syncWorkerStatusFromAssignments(workerOid);
+
+    const populated = await Assignment.findById(createdId).populate(ASSIGNMENT_POPULATE).lean();
+    if (!populated) {
+      return jsonUnexpected(ROUTE, new Error("Assignment missing after create"), 500);
+    }
 
     return NextResponse.json(
       serializeAssignment(populated as Parameters<typeof serializeAssignment>[0]),
       { status: 201 },
     );
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 400 });
+    if (e instanceof HttpError) {
+      return NextResponse.json({ error: e.message }, { status: e.status });
+    }
+    return jsonUnexpected(ROUTE, e);
   }
 }

@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { connectDB } from "@/lib/mongodb";
+import { Assignment } from "@/models/Assignment";
 import { Client } from "@/models/Client";
 import { User } from "@/models/User";
+import { syncWorkerStatusFromAssignments } from "@/lib/assignment-sync";
+import { jsonUnexpected } from "@/lib/http-error";
 import { serializeClient } from "../route";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -65,18 +68,28 @@ export async function PATCH(req: Request, ctx: Ctx) {
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {
+  const ROUTE = "DELETE /api/clients/[id]";
   try {
     await connectDB();
     const { id } = await ctx.params;
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
-    const res = await Client.findByIdAndDelete(id);
-    if (!res) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    await User.findByIdAndDelete(res.contact_user_id);
+    const existing = await Client.findById(id).lean();
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    const oid = new mongoose.Types.ObjectId(id);
+    const workerIds = await Assignment.distinct("worker_id", { client_id: oid });
+    await Assignment.deleteMany({ client_id: oid });
+
+    for (const wid of workerIds) {
+      await syncWorkerStatusFromAssignments(new mongoose.Types.ObjectId(String(wid)));
+    }
+
+    await Client.deleteOne({ _id: oid });
+    await User.deleteOne({ _id: existing.contact_user_id });
     return NextResponse.json({ ok: true });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonUnexpected(ROUTE, e);
   }
 }
