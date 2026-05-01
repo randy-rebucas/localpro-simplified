@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { connectDB } from "@/lib/mongodb";
-import { Assignment } from "@/models/Assignment";
+import { Job } from "@/models/Job";
 import { Worker } from "@/models/Worker";
 import { User } from "@/models/User";
 import { jsonUnexpected } from "@/lib/http-error";
@@ -54,6 +54,24 @@ export async function PATCH(req: Request, ctx: Ctx) {
       workerUpdates.skill = body.skill;
     }
     if (body.status !== undefined && ["available", "assigned", "inactive"].includes(body.status)) {
+      if (
+        body.status === "inactive" &&
+        existing.status !== "inactive"
+      ) {
+        const activeJobs = await Job.countDocuments({
+          worker_id: id,
+          status: { $in: ["assigned", "in_progress"] },
+        });
+        if (activeJobs > 0) {
+          return NextResponse.json(
+            {
+              error:
+                "Cannot mark inactive while this worker has active jobs (complete, cancel, or reassign them first)",
+            },
+            { status: 400 },
+          );
+        }
+      }
       workerUpdates.status = body.status;
     }
     if (body.rating !== undefined) {
@@ -84,7 +102,7 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const oid = new mongoose.Types.ObjectId(id);
-    await Assignment.deleteMany({ worker_id: oid });
+    await Job.deleteMany({ worker_id: oid });
 
     await Worker.deleteOne({ _id: oid });
     await User.deleteOne({ _id: existing.user_id });

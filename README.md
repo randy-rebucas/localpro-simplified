@@ -1,6 +1,6 @@
 # LocalPro Workforce Manager
 
-Internal admin app for **clients** (businesses), **workers**, and **job assignments**. Built as a small MVP: Next.js App Router, MongoDB via Mongoose, and **shadcn/ui** (Base UI + Tailwind).
+Internal admin app for **clients** (businesses), **workers**, and **jobs**. Built as a small MVP: Next.js App Router, MongoDB via Mongoose, and **shadcn/ui** (Base UI + Tailwind).
 
 ## Stack
 
@@ -52,21 +52,24 @@ Internal admin app for **clients** (businesses), **workers**, and **job assignme
 
 ## Features
 
-- **Dashboard**: counts for clients, workers, today’s active jobs, and revenue from paid assignments with `client_price`.
+- **Dashboard**: counts for clients, workers, today’s active jobs, and revenue from paid jobs with `client_price` (amounts shown as **Philippine peso**, PHP).
 - **Clients / Workers**: CRUD tables with dialogs; search (clients) and filters.
-- **Assignments**: link client + worker, schedule, status, payment, optional `client_price` / `worker_pay` (profit shown when both set).
+- **Job types** (`/job-types`): catalog of **slug** + **label** (MongoDB `job_types`); active/inactive flag.
+- **Jobs** (`/jobs`, `GET/POST/PATCH/DELETE /api/jobs`): stored in MongoDB **`jobs`** (Job model); each row references client, worker, and **job type** (`job_type_id`), plus schedule, status, payment, optional prices (profit and margin % when both set).
+- **Rate & margin engine** (`/rates`): one **rate rule** per job type (`job_type_id`); preview and jobs UI **“From rate card”** use `POST /api/rate-engine/preview` with `job_type_id`.
 - **User model**: shared contact records (`kind`: `client_contact` | `worker`). Clients reference `contact_user_id`; workers reference `user_id`. API responses still expose familiar fields (`contact_person`, `full_name`, `phone`, `email`) via serializers.
 
 ## Project layout (high level)
 
 - `app/` — routes, layouts, API route handlers (`app/api/*`)
 - `components/` — app shell, feature views, `components/ui/` (shadcn)
-- `models/` — Mongoose schemas (`User`, `Client`, `Worker`, `Assignment`)
-- `lib/` — DB connection, auth/session, assignment helpers, stats
+- `models/` — Mongoose schemas (`User`, `Client`, `Worker`, `JobType`, `Job`, `RateRule`) — jobs live in the **`jobs`** collection; types in **`job_types`**.
+- `lib/` — DB connection, auth/session, job helpers, stats
 - `proxy.ts` — request proxy (auth gate for dashboard + protected APIs; see [Next.js proxy docs](https://nextjs.org/docs/app/api-reference/file-conventions/proxy))
 
 ## Deployment notes
 
+- **Jobs data**: Scheduled work lives in the **`jobs`** collection (Job model). Older **`assignments`** collection documents are **not** migrated automatically—plan a one-off import or start from a clean database.
 - Set **`MONGODB_URI`**, **`ADMIN_PASSWORD`**, and **`AUTH_SECRET`** in the host environment (never commit `.env.local`).
 - Rotating **`AUTH_SECRET`** invalidates existing sessions.
 - Ensure the deployment region can reach your MongoDB cluster (Atlas IP allowlist, VPC, etc.).

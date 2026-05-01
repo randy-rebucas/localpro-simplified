@@ -1,9 +1,9 @@
 import { getDashboardStats } from "@/lib/dashboard-stats";
+import { phpCurrencyFormatter } from "@/lib/currency-format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function DashboardPage() {
   const stats = await getDashboardStats();
-  const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
   const tiles = [
     { title: "Clients", value: stats.total_clients },
@@ -11,7 +11,7 @@ export default async function DashboardPage() {
     { title: "Active jobs today", value: stats.active_jobs_today },
     {
       title: "Total revenue (paid)",
-      value: currency.format(stats.total_revenue),
+      value: phpCurrencyFormatter.format(stats.total_revenue),
     },
   ];
 

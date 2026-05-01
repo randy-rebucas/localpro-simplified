@@ -1,12 +1,13 @@
 import mongoose from "mongoose";
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { Assignment } from "@/models/Assignment";
+import { Job } from "@/models/Job";
+import { JobType } from "@/models/JobType";
 import { Worker } from "@/models/Worker";
-import { ASSIGNMENT_POPULATE } from "@/lib/assignment-populate";
-import { findTimeOverlapForWorker } from "@/lib/assignment-queries";
-import { syncWorkerStatusFromAssignments } from "@/lib/assignment-sync";
-import { formatAssignmentDay, parseAssignmentDateInput } from "@/lib/assignment-date";
+import { JOB_POPULATE } from "@/lib/job-populate";
+import { findTimeOverlapForWorker } from "@/lib/job-queries";
+import { syncWorkerStatusFromJobs } from "@/lib/job-sync";
+import { formatJobDay, parseJobDateInput } from "@/lib/job-date";
 import { timeToMinutes } from "@/lib/time-overlap";
 import { HttpError, jsonUnexpected } from "@/lib/http-error";
 
@@ -15,6 +16,7 @@ type PopulatedWorkerRow = {
   _id: mongoose.Types.ObjectId;
   user_id?: mongoose.Types.ObjectId | { display_name?: string };
 };
+type PopulatedJobType = { _id: mongoose.Types.ObjectId; slug?: string; label?: string };
 
 function workerNameFromPopulate(worker: unknown): string | undefined {
   if (!worker || typeof worker !== "object" || !("user_id" in worker)) return undefined;
@@ -24,13 +26,33 @@ function workerNameFromPopulate(worker: unknown): string | undefined {
   return typeof dn === "string" ? dn : undefined;
 }
 
-export function serializeAssignment(
+function jobTypeParts(job_type_id: unknown): { job_type_id: string; job_type: string; job_slug: string } {
+  if (job_type_id && typeof job_type_id === "object" && "_id" in job_type_id) {
+    const j = job_type_id as PopulatedJobType;
+    return {
+      job_type_id: j._id.toString(),
+      job_type: typeof j.label === "string" ? j.label : "",
+      job_slug: typeof j.slug === "string" ? j.slug : "",
+    };
+  }
+  const id = job_type_id != null ? String(job_type_id) : "";
+  return { job_type_id: id, job_type: "", job_slug: "" };
+}
+
+export async function assertActiveJobType(job_type_id: string) {
+  const jt = await JobType.findById(job_type_id).lean();
+  if (!jt) return { ok: false as const, error: "Job type not found" };
+  if (!jt.active) return { ok: false as const, error: "Job type is inactive" };
+  return { ok: true as const, doc: jt };
+}
+
+export function serializeJob(
   doc: {
     _id: mongoose.Types.ObjectId;
     client_id: mongoose.Types.ObjectId | PopulatedClient;
     worker_id: mongoose.Types.ObjectId | PopulatedWorkerRow;
+    job_type_id: mongoose.Types.ObjectId | PopulatedJobType;
     date: Date;
-    job_type: string;
     time_start: string;
     time_end: string;
     status: string;
@@ -56,14 +78,12 @@ export function serializeAssignment(
       ? client.business_name
       : undefined;
   const worker_name = workerNameFromPopulate(worker);
+  const jt = jobTypeParts(doc.job_type_id);
 
   const client_price = doc.client_price ?? null;
   const worker_pay = doc.worker_pay ?? null;
   let profit: number | null = null;
-  if (
-    opts?.profit !== undefined &&
-    Number.isFinite(opts.profit)
-  ) {
+  if (opts?.profit !== undefined && Number.isFinite(opts.profit)) {
     profit = opts.profit;
   } else if (
     client_price != null &&
@@ -74,14 +94,27 @@ export function serializeAssignment(
     profit = client_price - worker_pay;
   }
 
+  let margin_pct: number | null = null;
+  if (
+    profit != null &&
+    Number.isFinite(profit) &&
+    client_price != null &&
+    Number.isFinite(client_price) &&
+    client_price > 0
+  ) {
+    margin_pct = Math.round((profit / client_price) * 10000) / 100;
+  }
+
   return {
     id: doc._id.toString(),
     client_id: clientId,
     worker_id: workerId,
     client_name,
     worker_name,
-    date: formatAssignmentDay(doc.date),
-    job_type: doc.job_type,
+    job_type_id: jt.job_type_id,
+    job_type: jt.job_type,
+    job_slug: jt.job_slug,
+    date: formatJobDay(doc.date),
     time_start: doc.time_start,
     time_end: doc.time_end,
     status: doc.status,
@@ -90,6 +123,7 @@ export function serializeAssignment(
     client_price,
     worker_pay,
     profit,
+    margin_pct,
     created_at: doc.created_at?.toISOString() ?? null,
     updated_at: doc.updated_at?.toISOString() ?? null,
   };
@@ -102,6 +136,7 @@ export async function GET(req: Request) {
     const dateStr = searchParams.get("date");
     const client_id = searchParams.get("client_id");
     const worker_id = searchParams.get("worker_id");
+    const job_type_id = searchParams.get("job_type_id");
 
     const filter: Record<string, unknown> = {};
     if (client_id && mongoose.isValidObjectId(client_id)) {
@@ -110,9 +145,12 @@ export async function GET(req: Request) {
     if (worker_id && mongoose.isValidObjectId(worker_id)) {
       filter.worker_id = worker_id;
     }
+    if (job_type_id && mongoose.isValidObjectId(job_type_id)) {
+      filter.job_type_id = job_type_id;
+    }
     if (dateStr) {
       try {
-        const d = parseAssignmentDateInput(dateStr);
+        const d = parseJobDateInput(dateStr);
         const start = new Date(d);
         start.setHours(0, 0, 0, 0);
         const end = new Date(start);
@@ -123,32 +161,41 @@ export async function GET(req: Request) {
       }
     }
 
-    const rows = await Assignment.find(filter)
-      .populate(ASSIGNMENT_POPULATE)
+    const rows = await Job.find(filter)
+      .populate(JOB_POPULATE)
       .sort({ date: -1, time_start: -1 })
       .lean();
 
-    return NextResponse.json(rows.map((row) => serializeAssignment(row as Parameters<typeof serializeAssignment>[0])));
+    return NextResponse.json(rows.map((row) => serializeJob(row as Parameters<typeof serializeJob>[0])));
   } catch (e) {
-    return jsonUnexpected("GET /api/assignments", e);
+    return jsonUnexpected("GET /api/jobs", e);
   }
 }
 
 export async function POST(req: Request) {
-  const ROUTE = "POST /api/assignments";
+  const ROUTE = "POST /api/jobs";
   try {
     await connectDB();
     const body = await req.json();
 
     const client_id = body.client_id as string;
     const worker_id = body.worker_id as string;
+    const job_type_id = body.job_type_id as string;
     if (!mongoose.isValidObjectId(client_id) || !mongoose.isValidObjectId(worker_id)) {
       return NextResponse.json({ error: "Invalid client_id or worker_id" }, { status: 400 });
+    }
+    if (!mongoose.isValidObjectId(job_type_id)) {
+      return NextResponse.json({ error: "Invalid job_type_id" }, { status: 400 });
+    }
+
+    const jtCheck = await assertActiveJobType(job_type_id);
+    if (!jtCheck.ok) {
+      return NextResponse.json({ error: jtCheck.error }, { status: 400 });
     }
 
     let date: Date;
     try {
-      date = parseAssignmentDateInput(body.date);
+      date = parseJobDateInput(body.date);
     } catch {
       return NextResponse.json({ error: "Invalid date" }, { status: 400 });
     }
@@ -187,7 +234,7 @@ export async function POST(req: Request) {
         const worker = await Worker.findById(worker_id).session(session).exec();
         if (!worker) throw new HttpError(404, "Worker not found");
         if (worker.status === "inactive") {
-          throw new HttpError(400, "Cannot assign an inactive worker");
+          throw new HttpError(400, "Cannot book an inactive worker");
         }
 
         const overlap = await findTimeOverlapForWorker(
@@ -199,16 +246,16 @@ export async function POST(req: Request) {
           session,
         );
         if (overlap) {
-          throw new HttpError(409, "Worker already has an overlapping assignment at this time");
+          throw new HttpError(409, "Worker already has an overlapping job at this time");
         }
 
-        const created = await Assignment.create(
+        const created = await Job.create(
           [
             {
               client_id,
               worker_id,
+              job_type_id,
               date,
-              job_type: String(body.job_type ?? "cleaning"),
               time_start,
               time_end,
               status,
@@ -226,15 +273,15 @@ export async function POST(req: Request) {
       await session.endSession();
     }
 
-    await syncWorkerStatusFromAssignments(workerOid);
+    await syncWorkerStatusFromJobs(workerOid);
 
-    const populated = await Assignment.findById(createdId).populate(ASSIGNMENT_POPULATE).lean();
+    const populated = await Job.findById(createdId).populate(JOB_POPULATE).lean();
     if (!populated) {
-      return jsonUnexpected(ROUTE, new Error("Assignment missing after create"), 500);
+      return jsonUnexpected(ROUTE, new Error("Job missing after create"), 500);
     }
 
     return NextResponse.json(
-      serializeAssignment(populated as Parameters<typeof serializeAssignment>[0]),
+      serializeJob(populated as Parameters<typeof serializeJob>[0]),
       { status: 201 },
     );
   } catch (e) {

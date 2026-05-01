@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import { connectDB } from "@/lib/mongodb";
-import { Assignment } from "@/models/Assignment";
+import { Job } from "@/models/Job";
 import { Client } from "@/models/Client";
 import { User } from "@/models/User";
-import { syncWorkerStatusFromAssignments } from "@/lib/assignment-sync";
+import { syncWorkerStatusFromJobs } from "@/lib/job-sync";
 import { jsonUnexpected } from "@/lib/http-error";
 import { serializeClient } from "../route";
 
@@ -79,11 +79,11 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const oid = new mongoose.Types.ObjectId(id);
-    const workerIds = await Assignment.distinct("worker_id", { client_id: oid });
-    await Assignment.deleteMany({ client_id: oid });
+    const workerIds = await Job.distinct("worker_id", { client_id: oid });
+    await Job.deleteMany({ client_id: oid });
 
     for (const wid of workerIds) {
-      await syncWorkerStatusFromAssignments(new mongoose.Types.ObjectId(String(wid)));
+      await syncWorkerStatusFromJobs(new mongoose.Types.ObjectId(String(wid)));
     }
 
     await Client.deleteOne({ _id: oid });

@@ -1,6 +1,6 @@
 /** Calendar-day parsing/storage helpers (local timezone, noon anchor). */
 
-export function parseAssignmentDateInput(input: unknown): Date {
+export function parseJobDateInput(input: unknown): Date {
   if (input instanceof Date && !Number.isNaN(input.getTime())) {
     const x = new Date(input);
     x.setHours(12, 0, 0, 0);
@@ -24,7 +24,7 @@ export function parseAssignmentDateInput(input: unknown): Date {
   return parsed;
 }
 
-export function formatAssignmentDay(value: Date | string): string {
+export function formatJobDay(value: Date | string): string {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return "";
   const y = d.getFullYear();

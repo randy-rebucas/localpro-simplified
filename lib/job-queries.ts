@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import type { ClientSession } from "mongoose";
-import { Assignment } from "@/models/Assignment";
+import { Job } from "@/models/Job";
 import { rangesOverlap } from "@/lib/time-overlap";
 
 export function startEndOfDay(d: Date): { start: Date; end: Date } {
@@ -16,7 +16,7 @@ export async function findTimeOverlapForWorker(
   date: Date,
   time_start: string,
   time_end: string,
-  excludeAssignmentId?: mongoose.Types.ObjectId,
+  excludeJobId?: mongoose.Types.ObjectId,
   session?: ClientSession | null,
 ) {
   const { start, end } = startEndOfDay(date);
@@ -25,11 +25,11 @@ export async function findTimeOverlapForWorker(
     date: { $gte: start, $lt: end },
     status: { $ne: "cancelled" },
   };
-  if (excludeAssignmentId) {
-    filter._id = { $ne: excludeAssignmentId };
+  if (excludeJobId) {
+    filter._id = { $ne: excludeJobId };
   }
 
-  let q = Assignment.find(filter);
+  let q = Job.find(filter);
   if (session) q = q.session(session);
   const candidates = await q.lean();
   return candidates.find((c) =>

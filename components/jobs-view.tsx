@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { phpCurrencyFormatter } from "@/lib/currency-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,14 +32,16 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
-type AssignmentRow = {
+type JobRow = {
   id: string;
   client_id: string;
   worker_id: string;
   client_name?: string;
   worker_name?: string;
-  date: string;
+  job_type_id: string;
   job_type: string;
+  job_slug?: string;
+  date: string;
   time_start: string;
   time_end: string;
   status: "assigned" | "in_progress" | "completed" | "cancelled";
@@ -47,48 +50,53 @@ type AssignmentRow = {
   client_price: number | null;
   worker_pay: number | null;
   profit: number | null;
+  margin_pct: number | null;
 };
 
 type ClientOpt = { id: string; business_name: string };
 type WorkerOpt = { id: string; full_name: string; status: string };
+type JobTypeOpt = { id: string; slug: string; label: string; active: boolean };
 
-const jobStatuses: AssignmentRow["status"][] = [
+const jobStatuses: JobRow["status"][] = [
   "assigned",
   "in_progress",
   "completed",
   "cancelled",
 ];
 
-const paymentStatuses: AssignmentRow["payment_status"][] = ["pending", "paid"];
+const paymentStatuses: JobRow["payment_status"][] = ["pending", "paid"];
 
-function jobStatusVariant(s: AssignmentRow["status"]) {
+function jobStatusVariant(s: JobRow["status"]) {
   if (s === "completed") return "secondary" as const;
   if (s === "cancelled") return "outline" as const;
   if (s === "in_progress") return "default" as const;
   return "secondary" as const;
 }
 
-export default function AssignmentsView() {
-  const [rows, setRows] = React.useState<AssignmentRow[]>([]);
+export default function JobsView() {
+  const [rows, setRows] = React.useState<JobRow[]>([]);
   const [clients, setClients] = React.useState<ClientOpt[]>([]);
   const [workers, setWorkers] = React.useState<WorkerOpt[]>([]);
+  const [jobTypes, setJobTypes] = React.useState<JobTypeOpt[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [filterDate, setFilterDate] = React.useState("");
   const [filterClient, setFilterClient] = React.useState("__all__");
   const [filterWorker, setFilterWorker] = React.useState("__all__");
+  const [filterJobType, setFilterJobType] = React.useState("__all__");
 
   const [open, setOpen] = React.useState(false);
-  const [editing, setEditing] = React.useState<AssignmentRow | null>(null);
+  const [editing, setEditing] = React.useState<JobRow | null>(null);
+  const [suggestLoading, setSuggestLoading] = React.useState(false);
 
   const [form, setForm] = React.useState({
     client_id: "",
     worker_id: "",
     date: "",
-    job_type: "cleaning",
+    job_type_id: "",
     time_start: "09:00",
     time_end: "17:00",
-    status: "assigned" as AssignmentRow["status"],
-    payment_status: "pending" as AssignmentRow["payment_status"],
+    status: "assigned" as JobRow["status"],
+    payment_status: "pending" as JobRow["payment_status"],
     notes: "",
     client_price: "" as string,
     worker_pay: "" as string,
@@ -99,14 +107,26 @@ export default function AssignmentsView() {
     [workers],
   );
 
-  async function reloadAssignments() {
+  const activeJobTypes = React.useMemo(() => jobTypes.filter((j) => j.active), [jobTypes]);
+
+  const jobTypesForForm = React.useMemo(() => {
+    if (!editing) return activeJobTypes;
+    const cur = jobTypes.find((j) => j.id === editing.job_type_id);
+    if (cur && !cur.active && !activeJobTypes.some((j) => j.id === cur.id)) {
+      return [cur, ...activeJobTypes];
+    }
+    return activeJobTypes;
+  }, [editing, jobTypes, activeJobTypes]);
+
+  async function reloadJobs() {
     const params = new URLSearchParams();
     if (filterDate) params.set("date", filterDate);
     if (filterClient !== "__all__") params.set("client_id", filterClient);
     if (filterWorker !== "__all__") params.set("worker_id", filterWorker);
-    const res = await fetch(`/api/assignments?${params.toString()}`);
+    if (filterJobType !== "__all__") params.set("job_type_id", filterJobType);
+    const res = await fetch(`/api/jobs?${params.toString()}`);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to load assignments");
+    if (!res.ok) throw new Error(data.error || "Failed to load jobs");
     setRows(data);
   }
 
@@ -114,12 +134,26 @@ export default function AssignmentsView() {
     let cancelled = false;
     async function boot() {
       try {
-        const [cRes, wRes] = await Promise.all([fetch("/api/clients"), fetch("/api/workers")]);
+        const [cRes, wRes, jRes] = await Promise.all([
+          fetch("/api/clients"),
+          fetch("/api/workers"),
+          fetch("/api/job-types"),
+        ]);
         const cJson = await cRes.json();
         const wJson = await wRes.json();
+        const jJson = await jRes.json();
         if (!cRes.ok) throw new Error(cJson.error || "Failed to load clients");
         if (!wRes.ok) throw new Error(wJson.error || "Failed to load workers");
+        if (!jRes.ok) throw new Error(jJson.error || "Failed to load job types");
         if (!cancelled) {
+          setJobTypes(
+            jJson.map((j: { id: string; slug: string; label: string; active: boolean }) => ({
+              id: j.id,
+              slug: j.slug,
+              label: j.label,
+              active: j.active,
+            })),
+          );
           setClients(
             cJson.map((c: { id: string; business_name: string }) => ({
               id: c.id,
@@ -149,9 +183,9 @@ export default function AssignmentsView() {
     async function load() {
       setLoading(true);
       try {
-        await reloadAssignments();
+        await reloadJobs();
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Failed to load assignments");
+        toast.error(e instanceof Error ? e.message : "Failed to load jobs");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -160,8 +194,8 @@ export default function AssignmentsView() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadAssignments closes over filters
-  }, [filterDate, filterClient, filterWorker]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadJobs closes over filters
+  }, [filterDate, filterClient, filterWorker, filterJobType]);
 
   function dayInputValue(day: string) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
@@ -195,11 +229,12 @@ export default function AssignmentsView() {
 
   function openCreate() {
     setEditing(null);
+    const firstJt = jobTypes.find((j) => j.active)?.id ?? "";
     setForm({
       client_id: clients[0]?.id ?? "",
       worker_id: selectableWorkers[0]?.id ?? "",
       date: dayInputValue(new Date().toISOString()),
-      job_type: "cleaning",
+      job_type_id: firstJt,
       time_start: "09:00",
       time_end: "17:00",
       status: "assigned",
@@ -211,13 +246,13 @@ export default function AssignmentsView() {
     setOpen(true);
   }
 
-  function openEdit(row: AssignmentRow) {
+  function openEdit(row: JobRow) {
     setEditing(row);
     setForm({
       client_id: row.client_id,
       worker_id: row.worker_id,
       date: dayInputValue(row.date),
-      job_type: row.job_type,
+      job_type_id: row.job_type_id,
       time_start: row.time_start,
       time_end: row.time_end,
       status: row.status,
@@ -231,11 +266,15 @@ export default function AssignmentsView() {
 
   async function save() {
     try {
+      if (!form.job_type_id) {
+        toast.error("Select a job type");
+        return;
+      }
       const payload: Record<string, unknown> = {
         client_id: form.client_id,
         worker_id: form.worker_id,
         date: form.date,
-        job_type: form.job_type,
+        job_type_id: form.job_type_id,
         time_start: form.time_start,
         time_end: form.time_end,
         status: form.status,
@@ -246,21 +285,21 @@ export default function AssignmentsView() {
       if (form.worker_pay.trim() !== "") payload.worker_pay = Number(form.worker_pay);
 
       const res = editing
-        ? await fetch(`/api/assignments/${editing.id}`, {
+        ? await fetch(`/api/jobs/${editing.id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           })
-        : await fetch("/api/assignments", {
+        : await fetch("/api/jobs", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Save failed");
-      toast.success(editing ? "Assignment updated" : "Assignment created");
+      toast.success(editing ? "Job updated" : "Job created");
       setOpen(false);
-      await reloadAssignments();
+      await reloadJobs();
 
       const wRes = await fetch("/api/workers");
       const wJson = await wRes.json();
@@ -278,16 +317,50 @@ export default function AssignmentsView() {
     }
   }
 
-  async function patchAssignment(id: string, patch: Record<string, unknown>) {
+  async function suggestFromRateCard() {
+    setSuggestLoading(true);
     try {
-      const res = await fetch(`/api/assignments/${id}`, {
+      const res = await fetch("/api/rate-engine/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_type_id: form.job_type_id,
+          time_start: form.time_start,
+          time_end: form.time_end,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Suggestion failed");
+      if (!data.matched_rule) {
+        toast.warning("No matching rate rule", {
+          description: "Add a rate rule for this job type under Rate & margin.",
+        });
+        return;
+      }
+      if (data.suggested_client_price != null) {
+        setForm((f) => ({ ...f, client_price: String(data.suggested_client_price) }));
+      }
+      if (data.suggested_worker_pay != null) {
+        setForm((f) => ({ ...f, worker_pay: String(data.suggested_worker_pay) }));
+      }
+      toast.success("Prices filled from rate card");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Suggestion failed");
+    } finally {
+      setSuggestLoading(false);
+    }
+  }
+
+  async function patchJob(id: string, patch: Record<string, unknown>) {
+    try {
+      const res = await fetch(`/api/jobs/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Update failed");
-      await reloadAssignments();
+      await reloadJobs();
       const wRes = await fetch("/api/workers");
       const wJson = await wRes.json();
       if (wRes.ok) {
@@ -305,14 +378,14 @@ export default function AssignmentsView() {
     }
   }
 
-  async function remove(row: AssignmentRow) {
-    if (!confirm("Delete this assignment?")) return;
+  async function remove(row: JobRow) {
+    if (!confirm("Delete this job?")) return;
     try {
-      const res = await fetch(`/api/assignments/${row.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/jobs/${row.id}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Delete failed");
-      toast.success("Assignment deleted");
-      await reloadAssignments();
+      toast.success("Job deleted");
+      await reloadJobs();
       const wRes = await fetch("/api/workers");
       const wJson = await wRes.json();
       if (wRes.ok) {
@@ -329,11 +402,6 @@ export default function AssignmentsView() {
     }
   }
 
-  const currency = React.useMemo(
-    () => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }),
-    [],
-  );
-
   const workerOptionsForEdit = React.useMemo(() => {
     if (!editing) return selectableWorkers;
     const current = workers.find((w) => w.id === editing.worker_id);
@@ -348,12 +416,19 @@ export default function AssignmentsView() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Assignments</h1>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">Jobs</h1>
           <p className="text-sm text-muted-foreground">Who is working where, and when.</p>
         </div>
-        <Button onClick={openCreate} disabled={clients.length === 0 || selectableWorkers.length === 0}>
+        <Button
+          onClick={openCreate}
+          disabled={
+            clients.length === 0 ||
+            selectableWorkers.length === 0 ||
+            activeJobTypes.length === 0
+          }
+        >
           <Plus />
-          New assignment
+          New job
         </Button>
       </div>
 
@@ -406,12 +481,33 @@ export default function AssignmentsView() {
             </SelectContent>
           </Select>
         </div>
+        <div className="grid gap-2">
+          <Label>Job type</Label>
+          <Select
+            value={filterJobType}
+            onValueChange={(v) => setFilterJobType(typeof v === "string" ? v : "__all__")}
+          >
+            <SelectTrigger className="lg:w-56">
+              <SelectValue placeholder="All types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All job types</SelectItem>
+              {jobTypes.map((j) => (
+                <SelectItem key={j.id} value={j.id}>
+                  {j.label}
+                  {!j.active ? " (inactive)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Button
           variant="outline"
           onClick={() => {
             setFilterDate("");
             setFilterClient("__all__");
             setFilterWorker("__all__");
+            setFilterJobType("__all__");
           }}
         >
           Clear filters
@@ -430,20 +526,21 @@ export default function AssignmentsView() {
               <TableHead>Status</TableHead>
               <TableHead>Payment</TableHead>
               <TableHead>Profit</TableHead>
+              <TableHead className="tabular-nums">Margin</TableHead>
               <TableHead className="min-w-[220px] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-muted-foreground">
+                <TableCell colSpan={10} className="text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-muted-foreground">
-                  No assignments match these filters.
+                <TableCell colSpan={10} className="text-muted-foreground">
+                  No jobs match these filters.
                 </TableCell>
               </TableRow>
             ) : (
@@ -468,7 +565,12 @@ export default function AssignmentsView() {
                   </TableCell>
                   <TableCell className="tabular-nums">
                     {row.profit != null && Number.isFinite(row.profit)
-                      ? currency.format(row.profit)
+                      ? phpCurrencyFormatter.format(row.profit)
+                      : "—"}
+                  </TableCell>
+                  <TableCell className="tabular-nums text-muted-foreground">
+                    {row.margin_pct != null && Number.isFinite(row.margin_pct)
+                      ? `${row.margin_pct}%`
                       : "—"}
                   </TableCell>
                   <TableCell className="text-right">
@@ -477,7 +579,7 @@ export default function AssignmentsView() {
                         <Button
                           size="xs"
                           variant="secondary"
-                          onClick={() => patchAssignment(row.id, { payment_status: "paid" })}
+                          onClick={() => patchJob(row.id, { payment_status: "paid" })}
                         >
                           Paid
                         </Button>
@@ -486,7 +588,7 @@ export default function AssignmentsView() {
                         <Button
                           size="xs"
                           variant="outline"
-                          onClick={() => patchAssignment(row.id, { status: "completed" })}
+                          onClick={() => patchJob(row.id, { status: "completed" })}
                         >
                           Complete
                         </Button>
@@ -509,7 +611,7 @@ export default function AssignmentsView() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{editing ? "Edit assignment" : "New assignment"}</DialogTitle>
+            <DialogTitle>{editing ? "Edit job" : "New job"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-2">
@@ -565,12 +667,26 @@ export default function AssignmentsView() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="job_type">Job type</Label>
-              <Input
-                id="job_type"
-                value={form.job_type}
-                onChange={(e) => setForm((f) => ({ ...f, job_type: e.target.value }))}
-              />
+              <Label>Job type</Label>
+              <Select
+                value={form.job_type_id}
+                onValueChange={(v) => {
+                  if (typeof v !== "string") return;
+                  setForm((f) => ({ ...f, job_type_id: v }));
+                }}
+              >
+                <SelectTrigger id="job_type_id">
+                  <SelectValue placeholder="Select job type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {jobTypesForForm.map((j) => (
+                    <SelectItem key={j.id} value={j.id}>
+                      {j.label}
+                      {!j.active ? " (inactive)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
@@ -598,7 +714,7 @@ export default function AssignmentsView() {
                 value={form.status}
                 onValueChange={(v) => {
                   if (typeof v !== "string") return;
-                  setForm((f) => ({ ...f, status: v as AssignmentRow["status"] }));
+                  setForm((f) => ({ ...f, status: v as JobRow["status"] }));
                 }}
               >
                 <SelectTrigger>
@@ -621,7 +737,7 @@ export default function AssignmentsView() {
                   if (typeof v !== "string") return;
                   setForm((f) => ({
                     ...f,
-                    payment_status: v as AssignmentRow["payment_status"],
+                    payment_status: v as JobRow["payment_status"],
                   }));
                 }}
               >
@@ -637,24 +753,46 @@ export default function AssignmentsView() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label htmlFor="client_price">Client price</Label>
-                <Input
-                  id="client_price"
-                  inputMode="decimal"
-                  value={form.client_price}
-                  onChange={(e) => setForm((f) => ({ ...f, client_price: e.target.value }))}
-                />
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="client_price">Pricing</Label>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="gap-1"
+                  disabled={suggestLoading || !form.job_type_id}
+                  onClick={() => void suggestFromRateCard()}
+                >
+                  <Sparkles className="size-3.5" />
+                  {suggestLoading ? "…" : "From rate card"}
+                </Button>
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="worker_pay">Worker pay</Label>
-                <Input
-                  id="worker_pay"
-                  inputMode="decimal"
-                  value={form.worker_pay}
-                  onChange={(e) => setForm((f) => ({ ...f, worker_pay: e.target.value }))}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="client_price" className="sr-only">
+                    Client price
+                  </Label>
+                  <Input
+                    id="client_price"
+                    inputMode="decimal"
+                    placeholder="Client price"
+                    value={form.client_price}
+                    onChange={(e) => setForm((f) => ({ ...f, client_price: e.target.value }))}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="worker_pay" className="sr-only">
+                    Worker pay
+                  </Label>
+                  <Input
+                    id="worker_pay"
+                    inputMode="decimal"
+                    placeholder="Worker pay"
+                    value={form.worker_pay}
+                    onChange={(e) => setForm((f) => ({ ...f, worker_pay: e.target.value }))}
+                  />
+                </div>
               </div>
             </div>
             <div className="grid gap-2">

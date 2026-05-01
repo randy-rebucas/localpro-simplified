@@ -1,14 +1,14 @@
 import mongoose from "mongoose";
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { Assignment } from "@/models/Assignment";
+import { Job } from "@/models/Job";
 import { Worker } from "@/models/Worker";
-import { findTimeOverlapForWorker } from "@/lib/assignment-queries";
-import { syncWorkerStatusFromAssignments } from "@/lib/assignment-sync";
-import { parseAssignmentDateInput } from "@/lib/assignment-date";
+import { findTimeOverlapForWorker } from "@/lib/job-queries";
+import { syncWorkerStatusFromJobs } from "@/lib/job-sync";
+import { parseJobDateInput } from "@/lib/job-date";
 import { timeToMinutes } from "@/lib/time-overlap";
-import { ASSIGNMENT_POPULATE } from "@/lib/assignment-populate";
-import { serializeAssignment } from "../route";
+import { JOB_POPULATE } from "@/lib/job-populate";
+import { assertActiveJobType, serializeJob } from "../route";
 import { HttpError, jsonUnexpected } from "@/lib/http-error";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -20,16 +20,16 @@ export async function GET(_req: Request, ctx: Ctx) {
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
-    const doc = await Assignment.findById(id).populate(ASSIGNMENT_POPULATE).lean();
+    const doc = await Job.findById(id).populate(JOB_POPULATE).lean();
     if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    return NextResponse.json(serializeAssignment(doc as Parameters<typeof serializeAssignment>[0]));
+    return NextResponse.json(serializeJob(doc as Parameters<typeof serializeJob>[0]));
   } catch (e) {
-    return jsonUnexpected("GET /api/assignments/[id]", e);
+    return jsonUnexpected("GET /api/jobs/[id]", e);
   }
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {
-  const ROUTE = "PATCH /api/assignments/[id]";
+  const ROUTE = "PATCH /api/jobs/[id]";
   try {
     await connectDB();
     const { id } = await ctx.params;
@@ -37,7 +37,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
 
-    const prev = await Assignment.findById(id).lean();
+    const prev = await Job.findById(id).lean();
     if (!prev) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const body = await req.json();
@@ -65,7 +65,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       const worker = await Worker.findById(wid);
       if (!worker) return NextResponse.json({ error: "Worker not found" }, { status: 404 });
       if (worker.status === "inactive") {
-        return NextResponse.json({ error: "Cannot assign an inactive worker" }, { status: 400 });
+        return NextResponse.json({ error: "Cannot book an inactive worker" }, { status: 400 });
       }
       updates.worker_id = wid;
       nextWorkerId = new mongoose.Types.ObjectId(wid);
@@ -74,7 +74,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (body.date !== undefined) {
       let d: Date;
       try {
-        d = parseAssignmentDateInput(body.date);
+        d = parseJobDateInput(body.date);
       } catch {
         return NextResponse.json({ error: "Invalid date" }, { status: 400 });
       }
@@ -97,7 +97,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "time_end must be after time_start (HH:mm)" }, { status: 400 });
     }
 
-    if (body.job_type !== undefined) updates.job_type = String(body.job_type);
+    if (body.job_type_id !== undefined) {
+      const jtid = String(body.job_type_id);
+      if (!mongoose.isValidObjectId(jtid)) {
+        return NextResponse.json({ error: "Invalid job_type_id" }, { status: 400 });
+      }
+      const jtCheck = await assertActiveJobType(jtid);
+      if (!jtCheck.ok) {
+        return NextResponse.json({ error: jtCheck.error }, { status: 400 });
+      }
+      updates.job_type_id = jtid;
+    }
+
     if (body.notes !== undefined) updates.notes = String(body.notes);
 
     if (body.status !== undefined) {
@@ -144,29 +155,29 @@ export async function PATCH(req: Request, ctx: Ctx) {
             session,
           );
           if (overlap) {
-            throw new HttpError(409, "Worker already has an overlapping assignment at this time");
+            throw new HttpError(409, "Worker already has an overlapping job at this time");
           }
-          const r = await Assignment.updateOne({ _id: id }, { $set: updates }).session(session);
+          const r = await Job.updateOne({ _id: id }, { $set: updates }).session(session);
           if (r.matchedCount === 0) throw new HttpError(404, "Not found");
         });
       } finally {
         await session.endSession();
       }
     } else {
-      const updated = await Assignment.findByIdAndUpdate(id, { $set: updates }, { new: true }).lean();
+      const updated = await Job.findByIdAndUpdate(id, { $set: updates }, { new: true }).lean();
       if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
     const workersToSync = new Set<string>([prevWorkerId.toString(), nextWorkerId.toString()]);
     for (const wid of workersToSync) {
-      await syncWorkerStatusFromAssignments(new mongoose.Types.ObjectId(wid));
+      await syncWorkerStatusFromJobs(new mongoose.Types.ObjectId(wid));
     }
 
-    const populated = await Assignment.findById(id).populate(ASSIGNMENT_POPULATE).lean();
+    const populated = await Job.findById(id).populate(JOB_POPULATE).lean();
     if (!populated) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     return NextResponse.json(
-      serializeAssignment(populated as Parameters<typeof serializeAssignment>[0]),
+      serializeJob(populated as Parameters<typeof serializeJob>[0]),
     );
   } catch (e) {
     if (e instanceof HttpError) {
@@ -177,7 +188,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {
-  const ROUTE = "DELETE /api/assignments/[id]";
+  const ROUTE = "DELETE /api/jobs/[id]";
   try {
     await connectDB();
     const { id } = await ctx.params;
@@ -185,11 +196,11 @@ export async function DELETE(_req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
 
-    const prev = await Assignment.findById(id).lean();
+    const prev = await Job.findById(id).lean();
     if (!prev) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    await Assignment.findByIdAndDelete(id);
-    await syncWorkerStatusFromAssignments(prev.worker_id as mongoose.Types.ObjectId);
+    await Job.findByIdAndDelete(id);
+    await syncWorkerStatusFromJobs(prev.worker_id as mongoose.Types.ObjectId);
 
     return NextResponse.json({ ok: true });
   } catch (e) {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, ClipboardList, LayoutDashboard, UsersRound } from "lucide-react";
+import { Building2, ClipboardList, LayoutDashboard, Percent, Tags, UsersRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { LogoutButton } from "@/components/logout-button";
@@ -10,8 +10,10 @@ import { LogoutButton } from "@/components/logout-button";
 const items = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/clients", label: "Clients", icon: Building2 },
+  { href: "/job-types", label: "Job types", icon: Tags },
   { href: "/workers", label: "Workers", icon: UsersRound },
-  { href: "/assignments", label: "Assignments", icon: ClipboardList },
+  { href: "/jobs", label: "Jobs", icon: ClipboardList },
+  { href: "/rates", label: "Rate & margin", icon: Percent },
 ];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {

@@ -7,7 +7,7 @@ Build a simple but production-structured MVP web app called:
 This is an internal tool for managing:
 - Clients (businesses)
 - Workers (employees/providers)
-- Job Assignments (worker assigned to client per day or monthly)
+- Jobs (worker booked to client per day or recurring)
 
 Focus on SPEED, CLARITY, and USABILITY. Avoid overengineering.
 
@@ -74,14 +74,14 @@ Features:
 
 ---
 
-## 4. JOB ASSIGNMENT SYSTEM (CORE FEATURE)
+## 4. JOB SYSTEM (CORE FEATURE)
 
 Fields:
 - id
 - client_id (relation)
 - worker_id (relation)
 - date
-- job_type (cleaning, helper, etc.)
+- job_type_id (relation to JobType catalog)
 - time_start
 - time_end
 - status (assigned, in_progress, completed, cancelled)
@@ -89,9 +89,9 @@ Fields:
 - notes
 
 Features:
-- Assign worker to client
-- View all assignments
-- Filter by date/client/worker
+- Book worker to client
+- View all jobs
+- Filter by date/client/worker/job type
 - Update job status
 - Mark payment as paid
 
@@ -114,7 +114,7 @@ Show:
   - Dashboard
   - Clients
   - Workers
-  - Assignments
+  - Jobs
 
 - Table-based UI using **shadcn `Table`** (and related primitives); pair with **Dialog** or **Sheet** for forms where appropriate
   - Add button (`Button`)
@@ -130,22 +130,23 @@ Show:
 Define **Mongoose** models (TypeScript + `Schema` / `model()`):
 - `Client`
 - `Worker`
-- `Assignment`
+- `JobType`
+- `Job`
 
 Conventions:
 - Use `_id` as MongoDB ObjectId; expose stable IDs in APIs as strings where helpful
 - Reference related documents with `Schema.Types.ObjectId` + `ref` (e.g. `client_id` → `Client`, `worker_id` → `Worker`)
-- Include sensible indexes (e.g. assignment date + worker for double-booking checks)
+- Include sensible indexes (e.g. job date + worker for double-booking checks)
 
 Relations:
-- Assignment references Client and Worker (populate in reads when listing detail views)
+- Job references Client, Worker, and JobType (populate in reads when listing detail views)
 
 ---
 
 ## 8. BUSINESS LOGIC RULES
 
-- A worker cannot be assigned if status = inactive
-- When assigned → worker status becomes “assigned”
+- A worker cannot be booked if status = inactive
+- When booked → worker status becomes “assigned”
 - When job completed → worker becomes “available”
 - Prevent double booking on same date/time
 
@@ -166,7 +167,7 @@ Relations:
 
 Provide:
 1. Folder structure (including `lib/mongodb.ts` or equivalent connection helper, `models/*` for Mongoose, `components/ui/*` for shadcn)
-2. **Mongoose** models/schemas for Client, Worker, Assignment (with refs and indexes)
+2. **Mongoose** models/schemas for Client, Worker, JobType, Job (with refs and indexes)
 3. API routes using Mongoose (validation errors → appropriate HTTP status)
 4. React Server/Client components using **shadcn/ui** for layout, tables, forms, and feedback (`toast` from shadcn stack if used)
 5. Setup instructions: Node env, `MONGODB_URI`, `npx shadcn@latest init` / component adds as needed, run dev
@@ -178,7 +179,7 @@ Provide:
 - Keep everything minimal but clean
 - Do **not** use Prisma or SQL ORMs—**MongoDB + Mongoose only** for data
 - Prefer shadcn/ui for interactive UI; avoid adding parallel UI libraries unless strictly necessary
-- Prioritize working CRUD and assignment system
+- Prioritize working CRUD and jobs system
 - Code should be easy to extend later
 
 ---

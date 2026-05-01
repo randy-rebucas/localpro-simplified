@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "LocalPro Workforce Manager",
-  description: "Internal tool for clients, workers, and assignments",
+  description: "Internal tool for clients, workers, and jobs",
 };
 
 export default function RootLayout({

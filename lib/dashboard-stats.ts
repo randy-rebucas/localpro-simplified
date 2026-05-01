@@ -1,7 +1,7 @@
 import { connectDB } from "@/lib/mongodb";
 import { Client } from "@/models/Client";
 import { Worker } from "@/models/Worker";
-import { Assignment } from "@/models/Assignment";
+import { Job } from "@/models/Job";
 
 export async function getDashboardStats() {
   await connectDB();
@@ -14,11 +14,11 @@ export async function getDashboardStats() {
   const [total_clients, total_workers, active_jobs_today, revenueAgg] = await Promise.all([
     Client.countDocuments(),
     Worker.countDocuments(),
-    Assignment.countDocuments({
+    Job.countDocuments({
       date: { $gte: todayStart, $lt: todayEnd },
       status: { $in: ["assigned", "in_progress"] },
     }),
-    Assignment.aggregate<{ total: number }>([
+    Job.aggregate<{ total: number }>([
       {
         $match: {
           payment_status: "paid",

@@ -1,8 +1,9 @@
 import "./Client";
 import "./Worker";
+import "./JobType";
 import mongoose, { Schema, model, models } from "mongoose";
 
-const AssignmentSchema = new Schema(
+const JobSchema = new Schema(
   {
     client_id: {
       type: Schema.Types.ObjectId,
@@ -17,7 +18,12 @@ const AssignmentSchema = new Schema(
       index: true,
     },
     date: { type: Date, required: true, index: true },
-    job_type: { type: String, required: true, trim: true, maxlength: 128 },
+    job_type_id: {
+      type: Schema.Types.ObjectId,
+      ref: "JobType",
+      required: true,
+      index: true,
+    },
     time_start: { type: String, required: true, trim: true, maxlength: 8 },
     time_end: { type: String, required: true, trim: true, maxlength: 8 },
     status: {
@@ -37,15 +43,15 @@ const AssignmentSchema = new Schema(
   {
     versionKey: false,
     timestamps: { createdAt: "created_at", updatedAt: "updated_at" },
-    collection: "assignments",
+    collection: "jobs",
   },
 );
 
-AssignmentSchema.index({ worker_id: 1, date: 1 });
-AssignmentSchema.index({ status: 1, date: -1 });
+JobSchema.index({ worker_id: 1, date: 1 });
+JobSchema.index({ status: 1, date: -1 });
 
-export type AssignmentDoc = mongoose.InferSchemaType<typeof AssignmentSchema> & {
+export type JobDoc = mongoose.InferSchemaType<typeof JobSchema> & {
   _id: mongoose.Types.ObjectId;
 };
 
-export const Assignment = models.Assignment ?? model("Assignment", AssignmentSchema);
+export const Job = models.Job ?? model("Job", JobSchema);
