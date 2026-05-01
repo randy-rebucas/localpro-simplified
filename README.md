@@ -1,36 +1,78 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LocalPro Workforce Manager
 
-## Getting Started
+Internal admin app for **clients** (businesses), **workers**, and **job assignments**. Built as a small MVP: Next.js App Router, MongoDB via Mongoose, and **shadcn/ui** (Base UI + Tailwind).
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Next.js 16** (App Router, Turbopack dev)
+- **MongoDB** + **Mongoose** (`models/*`, `lib/mongodb.ts`)
+- **shadcn/ui** components under `components/ui/`
+- **Session auth**: single admin password + signed HTTP-only cookie (`lib/session.ts`, `proxy.ts`)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Prerequisites
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Node.js 20+
+- [pnpm](https://pnpm.io/) (lockfile is pnpm)
+- A MongoDB instance (local, Atlas, or Docker)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Setup
 
-## Learn More
+1. **Install dependencies**
 
-To learn more about Next.js, take a look at the following resources:
+   ```bash
+   pnpm install
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+2. **Environment**
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   Copy `.env.example` to `.env.local` and set:
 
-## Deploy on Vercel
+   | Variable | Purpose |
+   |----------|---------|
+   | `MONGODB_URI` | MongoDB connection string |
+   | `ADMIN_PASSWORD` | Password for `/login` (defaults to `admin123` if unset; change in production) |
+   | `AUTH_SECRET` | HMAC secret for session cookies (required in production; dev fallback in `lib/session.ts`) |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+3. **Run the dev server**
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   ```bash
+   pnpm dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000). You are redirected to `/login`, then to `/dashboard` after sign-in.
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `pnpm dev` | Development server |
+| `pnpm build` | Production build (`MONGODB_URI` should be set so dynamic routes can connect during build if needed) |
+| `pnpm start` | Start production server |
+| `pnpm lint` | ESLint |
+
+## Features
+
+- **Dashboard**: counts for clients, workers, today’s active jobs, and revenue from paid assignments with `client_price`.
+- **Clients / Workers**: CRUD tables with dialogs; search (clients) and filters.
+- **Assignments**: link client + worker, schedule, status, payment, optional `client_price` / `worker_pay` (profit shown when both set).
+- **User model**: shared contact records (`kind`: `client_contact` | `worker`). Clients reference `contact_user_id`; workers reference `user_id`. API responses still expose familiar fields (`contact_person`, `full_name`, `phone`, `email`) via serializers.
+
+## Project layout (high level)
+
+- `app/` — routes, layouts, API route handlers (`app/api/*`)
+- `components/` — app shell, feature views, `components/ui/` (shadcn)
+- `models/` — Mongoose schemas (`User`, `Client`, `Worker`, `Assignment`)
+- `lib/` — DB connection, auth/session, assignment helpers, stats
+- `proxy.ts` — request proxy (auth gate for dashboard + protected APIs; see [Next.js proxy docs](https://nextjs.org/docs/app/api-reference/file-conventions/proxy))
+
+## Deployment notes
+
+- Set **`MONGODB_URI`**, **`ADMIN_PASSWORD`**, and **`AUTH_SECRET`** in the host environment (never commit `.env.local`).
+- Rotating **`AUTH_SECRET`** invalidates existing sessions.
+- Ensure the deployment region can reach your MongoDB cluster (Atlas IP allowlist, VPC, etc.).
+
+## Learn more
+
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Mongoose](https://mongoosejs.com/docs/guide.html)
+- [shadcn/ui](https://ui.shadcn.com/)
