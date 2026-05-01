@@ -1,10 +1,21 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import {
+  Building2,
+  Loader2,
+  Lock,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  Unlock,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -55,6 +66,24 @@ function statusVariant(s: ClientRow["status"]) {
   return "outline" as const;
 }
 
+function formatStatusLabel(s: ClientRow["status"]) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function summarizeClients(rows: ClientRow[]) {
+  let active = 0;
+  let prospect = 0;
+  let inactive = 0;
+  let portalOn = 0;
+  for (const r of rows) {
+    if (r.status === "active") active += 1;
+    else if (r.status === "prospect") prospect += 1;
+    else inactive += 1;
+    if (r.portal_enabled) portalOn += 1;
+  }
+  return { active, prospect, inactive, portalOn, total: rows.length };
+}
+
 export default function ClientsView() {
   const [rows, setRows] = React.useState<ClientRow[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -100,6 +129,8 @@ export default function ClientsView() {
       cancelled = true;
     };
   }, [debouncedQ, statusFilter]);
+
+  const summary = React.useMemo(() => summarizeClients(rows), [rows]);
 
   function openCreate() {
     setEditing(null);
@@ -185,68 +216,181 @@ export default function ClientsView() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Clients</h1>
-          <p className="text-sm text-muted-foreground">Business accounts you serve.</p>
+    <div className="space-y-8">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-1">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight md:text-3xl">Clients</h1>
+          <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+            Business accounts, contacts, and portal access. Search and filter refine the list below;
+            summary counts reflect what you see.
+          </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus />
-          Add client
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/jobs"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Jobs
+          </Link>
+          <Link
+            href="/invoices"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Invoices
+          </Link>
+          <Button onClick={openCreate} size="sm">
+            <Plus />
+            Add client
+          </Button>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Input
-          placeholder="Search name, contact, phone…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="sm:max-w-xs"
-        />
-        <Select
-          value={statusFilter}
-          onValueChange={(v) => setStatusFilter(typeof v === "string" ? v : "all")}
-        >
-          <SelectTrigger className="sm:w-44">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {statuses.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <Card className="shadow-none lg:col-span-1">
+          <CardContent className="flex items-start gap-3 pt-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-muted/80 [&_svg]:size-4">
+              <Building2 />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Showing</p>
+              <p className="font-heading text-2xl font-semibold tabular-nums">
+                {loading ? <span className="text-muted-foreground">—</span> : summary.total}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none border-primary/15 bg-primary/[0.02]">
+          <CardContent className="pt-4">
+            <p className="text-xs font-medium text-muted-foreground">Active</p>
+            <p className="font-heading text-2xl font-semibold tabular-nums text-primary">
+              {loading ? "—" : summary.active}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="pt-4">
+            <p className="text-xs font-medium text-muted-foreground">Prospect</p>
+            <p className="font-heading text-2xl font-semibold tabular-nums">
+              {loading ? "—" : summary.prospect}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="pt-4">
+            <p className="text-xs font-medium text-muted-foreground">Inactive</p>
+            <p className="font-heading text-2xl font-semibold tabular-nums">
+              {loading ? "—" : summary.inactive}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="flex items-start gap-3 pt-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-muted/80 text-muted-foreground [&_svg]:size-4">
+              <Unlock />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Portal enabled</p>
+              <p className="font-heading text-2xl font-semibold tabular-nums">
+                {loading ? "—" : summary.portalOn}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="rounded-xl border bg-card">
+      <Card className="shadow-none">
+        <CardContent className="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center">
+          <div className="relative flex-1 sm:max-w-xs">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search business, contact, email, phone…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="pl-8"
+              aria-label="Search clients"
+            />
+          </div>
+          <Select
+            value={statusFilter}
+            onValueChange={(v) => setStatusFilter(typeof v === "string" ? v : "all")}
+          >
+            <SelectTrigger className="sm:w-44">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              {statuses.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {formatStatusLabel(s)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
+
+      <div className="overflow-hidden rounded-xl border bg-card shadow-none">
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead>Business</TableHead>
-              <TableHead>Contact</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead className="whitespace-nowrap">Workers ★</TableHead>
-              <TableHead>Portal</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="w-[120px] text-right">Actions</TableHead>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Business
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Contact
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Phone
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Email
+              </TableHead>
+              <TableHead className="whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Workers ★
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Portal
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Status
+              </TableHead>
+              <TableHead className="w-[120px] text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Actions
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-muted-foreground">
-                  Loading…
+                <TableCell colSpan={8} className="h-28">
+                  <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Loading clients…
+                  </div>
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-muted-foreground">
-                  No clients yet.
+                <TableCell colSpan={8} className="h-40">
+                  <div className="flex flex-col items-center justify-center gap-3 py-4 text-center">
+                    <div className="flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                      <Building2 className="size-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">No clients match</p>
+                      <p className="max-w-sm text-xs text-muted-foreground">
+                        {debouncedQ.trim() || statusFilter !== "all"
+                          ? "Try clearing search or setting status to all."
+                          : "Add your first client to start booking jobs and sending invoices."}
+                      </p>
+                    </div>
+                    {!debouncedQ.trim() && statusFilter === "all" ? (
+                      <Button size="sm" onClick={openCreate}>
+                        <Plus />
+                        Add client
+                      </Button>
+                    ) : null}
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (
@@ -271,12 +415,19 @@ export default function ClientsView() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={row.portal_enabled ? "default" : "outline"}>
+                    <Badge variant={row.portal_enabled ? "default" : "outline"} className="gap-1">
+                      {row.portal_enabled ? (
+                        <Unlock className="size-3 opacity-80" />
+                      ) : (
+                        <Lock className="size-3 opacity-80" />
+                      )}
                       {row.portal_enabled ? "On" : "Off"}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                    <Badge variant={statusVariant(row.status)}>
+                      {formatStatusLabel(row.status)}
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -299,6 +450,11 @@ export default function ClientsView() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit client" : "New client"}</DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {editing
+                ? "Update business details, status, or portal access."
+                : "Create a client record and optionally enable the self-service portal."}
+            </p>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-2">
@@ -358,7 +514,7 @@ export default function ClientsView() {
                 <SelectContent>
                   {statuses.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {formatStatusLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>

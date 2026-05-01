@@ -1,10 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Briefcase, Loader2, Mail, Pencil, Plus, Search, Trash2, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -56,9 +58,32 @@ function statusVariant(s: WorkerRow["status"]) {
   return "outline" as const;
 }
 
+function formatStatusLabel(s: WorkerRow["status"]) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatSkillLabel(s: WorkerRow["skill"]) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function summarizeWorkers(rows: WorkerRow[]) {
+  let available = 0;
+  let assigned = 0;
+  let inactive = 0;
+  let withEmail = 0;
+  for (const r of rows) {
+    if (r.status === "available") available += 1;
+    else if (r.status === "assigned") assigned += 1;
+    else inactive += 1;
+    if (r.email && String(r.email).trim()) withEmail += 1;
+  }
+  return { available, assigned, inactive, withEmail, total: rows.length };
+}
+
 export default function WorkersView() {
   const [rows, setRows] = React.useState<WorkerRow[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [q, setQ] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<WorkerRow | null>(null);
@@ -74,12 +99,15 @@ export default function WorkersView() {
     notes: "",
   });
 
+  const debouncedQ = useDebounced(q, 300);
+
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       try {
         const params = new URLSearchParams();
+        if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
         if (statusFilter !== "all") params.set("status", statusFilter);
         const res = await fetch(`/api/workers?${params.toString()}`);
         const data = await res.json();
@@ -95,7 +123,9 @@ export default function WorkersView() {
     return () => {
       cancelled = true;
     };
-  }, [statusFilter]);
+  }, [debouncedQ, statusFilter]);
+
+  const summary = React.useMemo(() => summarizeWorkers(rows), [rows]);
 
   function openCreate() {
     setEditing(null);
@@ -127,6 +157,13 @@ export default function WorkersView() {
     setOpen(true);
   }
 
+  function listQueryParams() {
+    const params = new URLSearchParams();
+    if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    return params;
+  }
+
   async function save() {
     try {
       const payload = {
@@ -149,9 +186,7 @@ export default function WorkersView() {
       toast.success(editing ? "Worker updated" : "Worker created");
       setOpen(false);
 
-      const params = new URLSearchParams();
-      if (statusFilter !== "all") params.set("status", statusFilter);
-      const listRes = await fetch(`/api/workers?${params.toString()}`);
+      const listRes = await fetch(`/api/workers?${listQueryParams().toString()}`);
       const list = await listRes.json();
       if (listRes.ok) setRows(list);
     } catch (e) {
@@ -173,62 +208,186 @@ export default function WorkersView() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">Workers</h1>
-          <p className="text-sm text-muted-foreground">People available for jobs.</p>
+    <div className="space-y-8">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-1">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight md:text-3xl">Workers</h1>
+          <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+            Field staff profiles, skills, and ops ratings. Summary counts match the list below
+            (search and status filter).
+          </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus />
-          Add worker
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/jobs" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            Jobs
+          </Link>
+          <Link
+            href="/worker-schedule"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Availability
+          </Link>
+          <Button onClick={openCreate} size="sm">
+            <Plus />
+            Add worker
+          </Button>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Select
-          value={statusFilter}
-          onValueChange={(v) => setStatusFilter(typeof v === "string" ? v : "all")}
-        >
-          <SelectTrigger className="sm:w-56">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {statuses.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <Card className="shadow-none">
+          <CardContent className="flex items-start gap-3 pt-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-muted/80 [&_svg]:size-4">
+              <UsersRound />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Showing</p>
+              <p className="font-heading text-2xl font-semibold tabular-nums">
+                {loading ? <span className="text-muted-foreground">—</span> : summary.total}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none border-primary/15 bg-primary/[0.02]">
+          <CardContent className="pt-4">
+            <p className="text-xs font-medium text-muted-foreground">Available</p>
+            <p className="font-heading text-2xl font-semibold tabular-nums text-primary">
+              {loading ? "—" : summary.available}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="flex items-start gap-3 pt-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-muted/80 text-muted-foreground [&_svg]:size-4">
+              <Briefcase />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Assigned</p>
+              <p className="font-heading text-2xl font-semibold tabular-nums">
+                {loading ? "—" : summary.assigned}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="pt-4">
+            <p className="text-xs font-medium text-muted-foreground">Inactive</p>
+            <p className="font-heading text-2xl font-semibold tabular-nums">
+              {loading ? "—" : summary.inactive}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="shadow-none">
+          <CardContent className="flex items-start gap-3 pt-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/80 bg-muted/80 text-muted-foreground [&_svg]:size-4">
+              <Mail />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Email on file</p>
+              <p className="font-heading text-2xl font-semibold tabular-nums">
+                {loading ? "—" : summary.withEmail}
+              </p>
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Used for assignment & shift emails
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="rounded-xl border bg-card">
+      <Card className="shadow-none">
+        <CardContent className="flex flex-col gap-3 pt-4 sm:flex-row sm:items-center">
+          <div className="relative flex-1 sm:max-w-xs">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search name, email, phone, location…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="pl-8"
+              aria-label="Search workers"
+            />
+          </div>
+          <Select
+            value={statusFilter}
+            onValueChange={(v) => setStatusFilter(typeof v === "string" ? v : "all")}
+          >
+            <SelectTrigger className="sm:w-56">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              {statuses.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {formatStatusLabel(s)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
+
+      <div className="overflow-hidden rounded-xl border bg-card shadow-none">
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Skill</TableHead>
-              <TableHead>Location</TableHead>
-              <TableHead className="whitespace-nowrap">Ops ★</TableHead>
-              <TableHead className="whitespace-nowrap">Clients ★</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="w-[120px] text-right">Actions</TableHead>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Name
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Email
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Skill
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Location
+              </TableHead>
+              <TableHead className="whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Ops ★
+              </TableHead>
+              <TableHead className="whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Clients ★
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Status
+              </TableHead>
+              <TableHead className="w-[120px] text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Actions
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-muted-foreground">
-                  Loading…
+                <TableCell colSpan={8} className="h-28">
+                  <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Loading workers…
+                  </div>
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-muted-foreground">
-                  No workers yet.
+                <TableCell colSpan={8} className="h-40">
+                  <div className="flex flex-col items-center justify-center gap-3 py-4 text-center">
+                    <div className="flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                      <UsersRound className="size-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">No workers match</p>
+                      <p className="max-w-sm text-xs text-muted-foreground">
+                        {debouncedQ.trim() || statusFilter !== "all"
+                          ? "Try clearing search or setting status to all."
+                          : "Add your first worker to start scheduling visits and smart assignment."}
+                      </p>
+                    </div>
+                    {!debouncedQ.trim() && statusFilter === "all" ? (
+                      <Button size="sm" onClick={openCreate}>
+                        <Plus />
+                        Add worker
+                      </Button>
+                    ) : null}
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (
@@ -238,9 +397,13 @@ export default function WorkersView() {
                   <TableCell className="max-w-[160px] truncate text-muted-foreground">
                     {row.email ?? "—"}
                   </TableCell>
-                  <TableCell>{row.skill}</TableCell>
-                  <TableCell>{row.location}</TableCell>
-                  <TableCell>{row.rating}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="font-normal capitalize">
+                      {formatSkillLabel(row.skill)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="max-w-[140px] truncate">{row.location}</TableCell>
+                  <TableCell className="tabular-nums">{row.rating}</TableCell>
                   <TableCell className="text-sm tabular-nums">
                     {row.rated_by_clients_avg != null ? (
                       <>
@@ -252,7 +415,9 @@ export default function WorkersView() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                    <Badge variant={statusVariant(row.status)}>
+                      {formatStatusLabel(row.status)}
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -275,6 +440,11 @@ export default function WorkersView() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit worker" : "New worker"}</DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {editing
+                ? "Update contact info, skill, location, or booking status."
+                : "Create a worker profile. Email is used for assignment and reminder notifications."}
+            </p>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-2">
@@ -326,7 +496,7 @@ export default function WorkersView() {
                 <SelectContent>
                   {skills.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {formatSkillLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -347,7 +517,7 @@ export default function WorkersView() {
                 <SelectContent>
                   {statuses.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {s}
+                      {formatStatusLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -385,4 +555,13 @@ export default function WorkersView() {
       </Dialog>
     </div>
   );
+}
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = React.useState(value);
+  React.useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
 }

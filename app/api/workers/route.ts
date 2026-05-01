@@ -4,6 +4,10 @@ import { connectDB } from "@/lib/mongodb";
 import { Worker } from "@/models/Worker";
 import { User } from "@/models/User";
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 type PopulatedWorkerUser = {
   _id: mongoose.Types.ObjectId;
   display_name?: string;
@@ -54,10 +58,23 @@ export async function GET(req: Request) {
     await connectDB();
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
+    const q = searchParams.get("q")?.trim();
 
     const filter: Record<string, unknown> = {};
     if (status && ["available", "assigned", "inactive"].includes(status)) {
       filter.status = status;
+    }
+    if (q) {
+      const safe = escapeRegex(q);
+      const regex = new RegExp(safe, "i");
+      const matchingUsers = await User.find({
+        kind: "worker",
+        $or: [{ display_name: regex }, { phone: regex }, { email: regex }],
+      })
+        .select("_id")
+        .lean();
+      const userIds = matchingUsers.map((u) => u._id);
+      filter.$or = [{ location: regex }, { user_id: { $in: userIds } }];
     }
 
     const rows = await Worker.find(filter)
