@@ -3,9 +3,19 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { Worker } from "@/models/Worker";
 import { User } from "@/models/User";
+import { validateRequest, CreateWorkerSchema, ListQuerySchema } from "@/lib/validation";
+import { verifySessionToken, sessionCookieName } from "@/lib/session";
+import { cookies } from "next/headers";
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Auth fallback check for protected routes
+async function verifyAdminAuth(): Promise<boolean> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(sessionCookieName)?.value;
+  return await verifySessionToken(token);
 }
 
 type PopulatedWorkerUser = {
@@ -55,10 +65,24 @@ export function serializeWorker(doc: {
 
 export async function GET(req: Request) {
   try {
+    // Auth fallback
+    const isAuth = await verifyAdminAuth();
+    if (!isAuth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     await connectDB();
     const { searchParams } = new URL(req.url);
-    const status = searchParams.get("status");
-    const q = searchParams.get("q")?.trim();
+    
+    // Validate query parameters
+    const queryData = await validateRequest(ListQuerySchema, {
+      status: searchParams.get("status"),
+      q: searchParams.get("q"),
+      limit: searchParams.get("limit"),
+      offset: searchParams.get("offset"),
+    });
+
+    const { status, q, limit, offset } = queryData;
 
     const filter: Record<string, unknown> = {};
     if (status && ["available", "assigned", "inactive"].includes(status)) {
@@ -77,45 +101,62 @@ export async function GET(req: Request) {
       filter.$or = [{ location: regex }, { user_id: { $in: userIds } }];
     }
 
+    // Get total count for pagination
+    const total = await Worker.countDocuments(filter);
+
+    // Fetch paginated results
     const rows = await Worker.find(filter)
       .populate("user_id")
       .sort({ created_at: -1 })
+      .limit(limit)
+      .skip(offset)
       .lean();
-    return NextResponse.json(rows.map(serializeWorker));
+
+    return NextResponse.json({
+      data: rows.map(serializeWorker),
+      pagination: {
+        limit,
+        offset,
+        total,
+        hasMore: offset + limit < total,
+      },
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 
 export async function POST(req: Request) {
+  // Auth fallback
+  const isAuth = await verifyAdminAuth();
+  if (!isAuth) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   let createdUserId: mongoose.Types.ObjectId | null = null;
   try {
     await connectDB();
     const body = await req.json();
-    const skill = ["cleaner", "helper", "technician"].includes(body.skill)
-      ? body.skill
-      : "cleaner";
-    const status = ["available", "assigned", "inactive"].includes(body.status)
-      ? body.status
-      : "available";
-    const rating = Number(body.rating);
+
+    // Validate request body
+    const validated = await validateRequest(CreateWorkerSchema, body);
 
     const user = await User.create({
       kind: "worker",
-      display_name: String(body.full_name ?? ""),
-      phone: String(body.phone ?? ""),
-      email: String(body.email ?? ""),
+      display_name: validated.full_name,
+      phone: validated.phone ?? "",
+      email: validated.email ?? "",
     });
     createdUserId = user._id;
 
     const doc = await Worker.create({
       user_id: user._id,
-      location: String(body.location ?? ""),
-      skill,
-      status,
-      rating: Number.isFinite(rating) ? Math.min(5, Math.max(1, rating)) : 3,
-      notes: String(body.notes ?? ""),
+      location: validated.location,
+      skill: validated.skill,
+      status: validated.status,
+      rating: validated.rating,
+      notes: validated.notes,
     });
 
     const populated = await Worker.findById(doc._id).populate("user_id").lean();

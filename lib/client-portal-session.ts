@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { timingSafeEqual } from "crypto";
 
 const CLIENT_SESSION_COOKIE = "localpro_client_session";
 
@@ -30,13 +31,28 @@ async function signMessage(message: string): Promise<string> {
   return bufToHex(sigBuf);
 }
 
+/**
+ * Timing-safe string comparison for hex strings.
+ * Uses Node's crypto.timingSafeEqual but handles length differences safely.
+ */
 function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let out = 0;
-  for (let i = 0; i < a.length; i++) {
-    out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  // Handle length mismatch without timing leakage
+  // Pad to same length before comparison
+  const maxLen = Math.max(a.length, b.length);
+  const aBuf = Buffer.alloc(maxLen);
+  const bBuf = Buffer.alloc(maxLen);
+  
+  // Copy to buffers, padding with zeros (safe against timing attacks)
+  Buffer.from(a).copy(aBuf);
+  Buffer.from(b).copy(bBuf);
+  
+  try {
+    // Use Node's timing-safe comparison
+    return timingSafeEqual(aBuf, bBuf) && a.length === b.length;
+  } catch {
+    // timingSafeEqual throws if buffers are different lengths
+    return false;
   }
-  return out === 0;
 }
 
 export const clientPortalCookieName = CLIENT_SESSION_COOKIE;

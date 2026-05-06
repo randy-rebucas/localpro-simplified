@@ -11,8 +11,26 @@ const PUBLIC_API_PATHS = new Set([
   "/api/portal/logout",
 ]);
 
+/** Maximum request body size: 1MB for most endpoints, 5MB for invoice-related operations. */
+const MAX_BODY_SIZE = 1024 * 1024; // 1MB
+const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5MB
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // Check request size limits early to prevent DoS
+  const contentLength = req.headers.get("content-length");
+  if (contentLength) {
+    const size = parseInt(contentLength, 10);
+    const isUploadEndpoint = pathname.includes("/invoice") || pathname.includes("/attachment");
+    const limit = isUploadEndpoint ? MAX_UPLOAD_SIZE : MAX_BODY_SIZE;
+    if (size > limit) {
+      return NextResponse.json(
+        { error: "Request payload too large" },
+        { status: 413 },
+      );
+    }
+  }
 
   if (PUBLIC_API_PATHS.has(pathname)) {
     return NextResponse.next();

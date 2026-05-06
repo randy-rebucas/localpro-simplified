@@ -9,6 +9,15 @@ import { timeToMinutes } from "@/lib/time-overlap";
 import { HttpError, jsonUnexpected } from "@/lib/http-error";
 import { createJobDocument } from "@/lib/create-job";
 import { notifyWorkerNewAssignment } from "@/lib/notifications/worker-assignment";
+import { verifySessionToken, sessionCookieName } from "@/lib/session";
+import { cookies } from "next/headers";
+
+// Auth fallback check for protected routes
+async function verifyAdminAuth(): Promise<boolean> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(sessionCookieName)?.value;
+  return await verifySessionToken(token);
+}
 
 type PopulatedClient = { _id: mongoose.Types.ObjectId; business_name?: string };
 type PopulatedWorkerRow = {
@@ -155,6 +164,12 @@ export function serializeJob(
 
 export async function GET(req: Request) {
   try {
+    // Auth fallback
+    const isAuth = await verifyAdminAuth();
+    if (!isAuth) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     await connectDB();
     const { searchParams } = new URL(req.url);
     const dateStr = searchParams.get("date");
@@ -163,6 +178,10 @@ export async function GET(req: Request) {
     const job_type_id = searchParams.get("job_type_id");
     const uninvoiced = searchParams.get("uninvoiced");
     const recurring_series_id = searchParams.get("recurring_series_id");
+    
+    // Pagination
+    const limit = Math.min(Number(searchParams.get("limit")) || 50, 1000);
+    const offset = Math.max(Number(searchParams.get("offset")) || 0, 0);
 
     const filter: Record<string, unknown> = {};
     if (client_id && mongoose.isValidObjectId(client_id)) {
@@ -193,12 +212,26 @@ export async function GET(req: Request) {
       }
     }
 
+    // Get total count
+    const total = await Job.countDocuments(filter);
+
+    // Fetch paginated results
     const rows = await Job.find(filter)
       .populate(JOB_POPULATE)
       .sort({ date: -1, time_start: -1 })
+      .limit(limit)
+      .skip(offset)
       .lean();
 
-    return NextResponse.json(rows.map((row) => serializeJob(row as Parameters<typeof serializeJob>[0])));
+    return NextResponse.json({
+      data: rows.map((row) => serializeJob(row as Parameters<typeof serializeJob>[0])),
+      pagination: {
+        limit,
+        offset,
+        total,
+        hasMore: offset + limit < total,
+      },
+    });
   } catch (e) {
     return jsonUnexpected("GET /api/jobs", e);
   }
